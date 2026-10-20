@@ -1,0 +1,40 @@
+# ── Public blog (static files built by the worker) ──────────────────────────
+{$SITE_DOMAIN} {
+	encode zstd gzip
+
+	# "/" → the reader's language: saved choice (cookie) first, then the browser language.
+	@cookie_en header_regexp Cookie (?:^|;\s*)lang=en
+	@cookie_fa header_regexp Cookie (?:^|;\s*)lang=fa
+	@browser_fa header_regexp Accept-Language (?i)^\s*fa
+	route / {
+		redir @cookie_en /en/ 302
+		redir @cookie_fa /fa/ 302
+		redir @browser_fa /fa/ 302
+		redir * /en/ 302
+	}
+
+	root * /www/current
+	file_server
+	handle_errors {
+		rewrite * /404.html
+		file_server
+	}
+}
+
+# ── Directus: where we review and edit posts ────────────────────────────────
+{$CMS_DOMAIN} {
+	request_body {
+		max_size 1GB
+	}
+	reverse_proxy directus:8055
+}
+
+# ── n8n: the workflow editor ────────────────────────────────────────────────
+# An extra browser password in front of n8n's own login. Directus reaches n8n
+# directly inside Docker, so the automation never passes through here.
+{$N8N_DOMAIN} {
+	basic_auth {
+		{$N8N_BASIC_AUTH_USER} {$N8N_BASIC_AUTH_HASH}
+	}
+	reverse_proxy n8n:5678
+}

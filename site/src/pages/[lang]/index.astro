@@ -1,0 +1,27 @@
+---
+import PostList from '../../components/PostList.astro';
+import { SITE, type Lang } from '../../consts';
+import Base from '../../layouts/Base.astro';
+import { langPaths, t } from '../../lib/i18n';
+import { getPosts } from '../../lib/posts';
+
+export const getStaticPaths = langPaths;
+
+const lang = Astro.params.lang as Lang;
+const posts = await getPosts(lang);
+const latest = posts.slice(0, 6);
+---
+
+<Base lang={lang}>
+	<section class="hero">
+		<h1>{SITE[lang].title}</h1>
+		{SITE[lang].intro.map((p) => <p>{p}</p>)}
+	</section>
+	<section>
+		<div class="section-head">
+			<h2>{t(lang, 'latest')}</h2>
+			{posts.length > latest.length && <a href={`/${lang}/blog/`}>{t(lang, 'seeAll')}</a>}
+		</div>
+		<PostList lang={lang} posts={latest} />
+	</section>
+</Base>

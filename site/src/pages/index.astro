@@ -1,0 +1,24 @@
+---
+// "/" picks a language. Caddy normally redirects before this page is ever
+// served (cookie → Accept-Language); this is the fallback for anything else.
+import { SITE } from '../consts';
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width,initial-scale=1" />
+		<title>{SITE.en.title} · {SITE.fa.title}</title>
+		<link rel="alternate" hreflang="fa" href="/fa/" />
+		<link rel="alternate" hreflang="en" href="/en/" />
+		<script is:inline>
+			const saved = document.cookie.match(/(?:^|; )lang=(fa|en)/)?.[1];
+			const browser = (navigator.languages || [navigator.language]).some((l) => /^fa\b/i.test(l)) ? 'fa' : 'en';
+			location.replace(`/${saved || browser}/`);
+		</script>
+	</head>
+	<body style="font-family: system-ui, sans-serif; display: grid; place-items: center; min-height: 90vh">
+		<p><a href="/fa/">فارسی</a> · <a href="/en/">English</a></p>
+	</body>
+</html>

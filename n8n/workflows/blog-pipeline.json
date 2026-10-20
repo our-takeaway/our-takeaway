@@ -1,0 +1,1370 @@
+{
+  "id": "BlogPipeline0001",
+  "name": "Blog pipeline",
+  "nodes": [
+    {
+      "id": "357d7e26-c401-4c82-afb7-93f843c83cf9",
+      "name": "Note 0",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -260,
+        -420
+      ],
+      "parameters": {
+        "content": "## Blog pipeline\nDirectus sends every change to a **post** here. We look at the new **status** and pick a path:\n- **new / revise** → AI writes the draft (top row)\n- **approved** → rebuild the site, post on X and Reddit (middle row)\n- **archived** → rebuild the site without it (bottom row)\n\nEverything else (processing, review, published…) is ignored, so our own status updates never loop.",
+        "width": 520,
+        "height": 300,
+        "color": 4
+      }
+    },
+    {
+      "id": "18064e53-76e4-4dea-bf8b-d1bb756c4ea8",
+      "name": "Directus: post changed",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "directus-posts",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "webhookId": "7121b82d-1776-422f-84fc-1b18833fbf61"
+    },
+    {
+      "id": "a4a34560-19c5-45ff-9214-9b89ec147160",
+      "name": "Read the event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Directus Flow sends: { event, keys | key, payload, collection }\nconst out = [];\nfor (const item of $input.all()) {\n  const secret = item.json.headers['x-webhook-secret'];\n  if (!secret || secret !== $env.N8N_WEBHOOK_SECRET) throw new Error('Wrong webhook secret');\n\n  const body = item.json.body;\n  const ids = body.keys ?? (body.key != null ? [body.key] : []);\n  const created = String(body.event).endsWith('.create');\n  // A new post counts as \"new\" even if the form didn't send the status.\n  const status = body.payload?.status ?? (created ? 'new' : null);\n\n  // One item per post (bulk edits can touch several at once).\n  for (const id of ids) out.push({ json: { id, status } });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "ec8442bc-2cbc-4d43-b514-671ef60b7c92",
+      "name": "Route by status",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "e96798b8-219f-4eab-b940-51e97af2889a",
+                    "leftValue": "={{ $json.status }}",
+                    "rightValue": "new",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  },
+                  {
+                    "id": "a45c1753-fccb-412e-847d-563fd8297e5d",
+                    "leftValue": "={{ $json.status }}",
+                    "rightValue": "revise",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "Write"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "892a9129-8f8b-45e6-b17b-87b665b4ecd6",
+                    "leftValue": "={{ $json.status }}",
+                    "rightValue": "approved",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "Publish"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "0a9da3e6-4a23-45d1-baa6-c1e90a197573",
+                    "leftValue": "={{ $json.status }}",
+                    "rightValue": "archived",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "Remove"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "7e69b27a-5b3e-4767-af57-733f6c499f7b",
+      "name": "Note 4",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        480,
+        -80
+      ],
+      "parameters": {
+        "content": "### Write the draft\nTranscript → (optional Whisper) → prompt from **writer_settings** in Directus → OpenRouter → save both languages + social texts → status **review**.",
+        "width": 420,
+        "height": 140,
+        "color": 5
+      }
+    },
+    {
+      "id": "936e4c42-1946-42c7-84fa-c3b837138bad",
+      "name": "Mark as processing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        100
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: \"processing\", error_message: null }) }}"
+      }
+    },
+    {
+      "id": "99f9dedf-1082-4936-b816-94b1c451c950",
+      "name": "Get the post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        740,
+        100
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "e4d63091-b980-4f89-b56f-6a0cc803f3e5",
+      "name": "Transcribe audio first?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        960,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3840ab88-b039-4568-b0a8-0558c5789548",
+              "leftValue": "={{ !$json.data.transcript?.trim() && !!$json.data.audio && $json.data.transcribe_audio === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "4182a692-cdb5-4404-9150-dea9394e7435",
+      "name": "Whisper (optional, paid)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1180,
+        -20
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WORKER_URL }}/transcribe",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WORKER_SECRET }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 1800000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ fileId: $json.data.audio }) }}"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "159470e8-a72b-4977-bbab-832c489d29aa",
+      "name": "Save the transcript",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        -20
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ transcript: $json.text }) }}"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "6d11418e-403a-4730-9823-e74eaf2722ed",
+      "name": "Get writer settings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1620,
+        100
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DIRECTUS_URL }}/items/writer_settings",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "fdcfa2ac-a4c1-4da7-83e9-20f499b7005b",
+      "name": "Build the AI request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1840,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Everything the AI needs: instructions from Directus + this meeting's material.\nconst settings = $json.data;\nconst post = $('Get the post').item.json.data;\nconst whisper = $('Save the transcript').isExecuted ? $('Save the transcript').item.json.data : null;\nconst transcript = (whisper?.transcript ?? post.transcript ?? '').trim();\nif (!transcript) throw new Error('No transcript. Paste one into the post, or attach audio and tick \"Transcribe the audio\".');\n\nconst status = $('Read the event').item.json.status;\nconst revising = status === 'revise' && post.feedback?.trim() && post.body_fa;\n\nconst meeting = [\n  post.title ? `Working title: ${post.title}` : '',\n  post.meeting_number != null ? `Meeting number: ${post.meeting_number}` : '',\n  `Date: ${(post.date_created || new Date().toISOString()).slice(0, 10)}`,\n  post.notes ? `Notes from the hosts:\\n${post.notes}` : '',\n].filter(Boolean).join('\\n');\nconst material = [\n  `Social language: ${settings.social_language || 'en'}`,\n  `<meeting>\\n${meeting}\\n</meeting>`,\n  `<transcript>\\n${transcript}\\n</transcript>`,\n];\nif (revising) {\n  const current = {};\n  for (const k of ['slug','title_fa','description_fa','tags_fa','body_fa','title_en','description_en','tags_en','body_en','tweet','reddit_title','reddit_body']) current[k] = post[k];\n  material.push(`<current_draft>\\n${JSON.stringify(current, null, 2)}\\n</current_draft>`);\n  material.push(`<reviewer_feedback>\\n${post.feedback}\\n</reviewer_feedback>`);\n}\n\nconst str = { type: 'string' };\nconst list = { type: 'array', items: str };\nconst fields = { slug: str, title_fa: str, description_fa: str, tags_fa: list, body_fa: str, title_en: str, description_en: str, tags_en: list, body_en: str, tweet: str, reddit_title: str, reddit_body: str };\n\nreturn {\n  json: {\n    request: {\n      model: settings.model || 'deepseek/deepseek-v4-flash-0731',\n      max_tokens: 32000,\n      messages: [\n        { role: 'system', content: settings.system_prompt },\n        { role: 'user', content: material.join('\\n\\n') },\n      ],\n      response_format: {\n        type: 'json_schema',\n        json_schema: { name: 'blog_post', strict: true, schema: { type: 'object', properties: fields, required: Object.keys(fields), additionalProperties: false } },\n      },\n    },\n  },\n};"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a4035dcd-c210-490d-8dd5-1e4640c073b5",
+      "name": "Ask the AI (OpenRouter)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2060,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OPENROUTER_BASE_URL || \"https://openrouter.ai/api/v1\" }}/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.OPENROUTER_API_KEY }}"
+            },
+            {
+              "name": "X-Title",
+              "value": "Our Takeaway"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 900000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "91d4a2de-5aed-4a6c-bb03-2ef97ece45e6",
+      "name": "Check the AI answer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2280,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse and sanity-check the JSON the model returned.\nconst choice = $json.choices?.[0];\nif (!choice) throw new Error('OpenRouter returned no answer: ' + JSON.stringify($json).slice(0, 500));\nif (choice.finish_reason === 'length') throw new Error('The answer was cut off (too long). Try again or shorten the transcript.');\nlet draft;\ntry { draft = JSON.parse(choice.message.content); }\ncatch { throw new Error('The AI answer was not valid JSON: ' + String(choice.message.content).slice(0, 300)); }\n\nfor (const k of ['title_fa', 'body_fa', 'title_en', 'body_en']) {\n  if (!draft[k]?.trim()) throw new Error(`The AI answer is missing ${k}`);\n}\n\nconst post = $('Get the post').item.json.data;\nconst slugify = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);\nconst tags = (t) => [...new Set((t || []).map((x) => String(x).trim().replace(/^#/, '')).filter(Boolean))].slice(0, 6);\n\nreturn {\n  json: {\n    // keep the URL stable once a post has been published\n    slug: post.published_at && post.slug ? post.slug : slugify(draft.slug) || `meeting-${post.id}`,\n    title_fa: draft.title_fa.trim(),\n    description_fa: draft.description_fa.trim(),\n    tags_fa: tags(draft.tags_fa),\n    body_fa: draft.body_fa.trim() + '\\n',\n    title_en: draft.title_en.trim(),\n    description_en: draft.description_en.trim(),\n    tags_en: tags(draft.tags_en),\n    body_en: draft.body_en.trim() + '\\n',\n    tweet: draft.tweet.trim(),\n    reddit_title: draft.reddit_title.trim().slice(0, 300),\n    reddit_body: draft.reddit_body.trim(),\n    feedback: null,\n    error_message: null,\n    status: 'review',\n  },\n};"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "c7f23d25-9229-475d-b68e-4894c26d43cb",
+      "name": "Is the slug taken?",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2500,
+        100
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts?filter[slug][_eq]={{ encodeURIComponent($json.slug) }}&filter[id][_neq]={{ $('Read the event').item.json.id }}&fields=id&limit=1",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "1cab8f45-3a94-4098-9fbd-d51fd9bbfeb0",
+      "name": "Use a free slug",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2720,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Another post already uses this slug → add this post's number to keep URLs unique.\nconst draft = { ...$('Check the AI answer').item.json };\nif ($json.data?.length) draft.slug = `${draft.slug}-${$('Read the event').item.json.id}`;\nreturn { json: draft };"
+      }
+    },
+    {
+      "id": "30fd2d78-8b7f-4c5d-9069-f9e84d8a96c3",
+      "name": "Save the draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2940,
+        100
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "b3ea1ee1-537b-4b51-9a1f-a9bc72f33e76",
+      "name": "Telegram set up?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3160,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "915bc937-9b41-4701-a608-0f177e78d7b3",
+              "leftValue": "={{ !!$env.TELEGRAM_BOT_TOKEN && !!$env.TELEGRAM_CHAT_ID }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "f478069c-5b96-43c5-8974-872906190451",
+      "name": "Tell us on Telegram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3380,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID, text: \"📝 Draft ready for review: \" + $('Check the AI answer').item.json.title_fa + \"\\n\" + $env.DIRECTUS_PUBLIC_URL + \"/admin/content/posts/\" + $('Read the event').item.json.id }) }}"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ea565d76-b491-4b6d-a8e0-bee7e171b605",
+      "name": "Note 19",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        480,
+        320
+      ],
+      "parameters": {
+        "content": "### Publish\nRebuild the static site (the worker pulls published posts from Directus), then post on X and Reddit once — a saved link means it was already posted.",
+        "width": 420,
+        "height": 140,
+        "color": 6
+      }
+    },
+    {
+      "id": "ab2a7179-7ef5-4598-95d0-13d7f4bfba8c",
+      "name": "Get the post to publish",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        520
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a4a9f99c-a3fa-40b2-943d-527860e5efb0",
+      "name": "Ready to publish?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        740,
+        520
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Refuse to publish a post that has no text yet (e.g. approved before the AI finished).\nconst post = $json.data;\nif (!post.slug) throw new Error('This post has no slug yet. Wait for the AI draft, or fill in the slug.');\nconst langs = ['fa', 'en'].filter((l) => post['title_' + l]?.trim() && post['body_' + l]?.trim());\nif (!langs.length) throw new Error('This post has no title and text in either language yet.');\nreturn { json: post };"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "2636fbde-f4bf-41aa-96e3-2ae014f4a3cb",
+      "name": "Mark as publishing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        520
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: \"publishing\", error_message: null, published_at: $json.published_at || $now.toISO() }) }}"
+      }
+    },
+    {
+      "id": "b569cfc4-aaa7-41d0-8dea-e984d7992b55",
+      "name": "Rebuild the site",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1180,
+        520
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WORKER_URL }}/build",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WORKER_SECRET }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 600000
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "0f301003-b4bd-48a8-a6e5-241bd9e88ae8",
+      "name": "Get social settings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        520
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DIRECTUS_URL }}/items/writer_settings",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "f89c55bb-d8ab-4022-a34e-b72963f69b6d",
+      "name": "Prepare social posts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1620,
+        520
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const post = $('Get the post to publish').item.json.data;\nconst s = $json.data;\nconst lang = s.social_language || 'en';\nconst url = `${$env.SITE_URL}/${lang}/blog/${post.slug}/`;\nconst xMax = 280 - 23 - 2; // links always count as 23 characters on X\nconst tweet = (post.tweet || post['title_' + lang] || '').trim();\nreturn {\n  json: {\n    url,\n    tweetText: (tweet.length > xMax ? tweet.slice(0, xMax - 1) + '…' : tweet) + '\\n\\n' + url,\n    toX: post.share_x === true && !post.x_url && $env.X_ENABLED === 'true',\n    toReddit: post.share_reddit === true && !post.reddit_url && !!s.reddit_subreddit && $env.REDDIT_ENABLED === 'true',\n    subreddit: (s.reddit_subreddit || '').replace(/^\\/?r\\//, ''),\n    redditKind: s.reddit_kind || 'link',\n    redditTitle: post.reddit_title || post['title_' + lang],\n    redditText: (post.reddit_body || '') + '\\n\\n' + url,\n  },\n};"
+      }
+    },
+    {
+      "id": "5c09cad6-f4d6-4117-ac07-447f5289bebe",
+      "name": "Post on X?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1840,
+        520
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3104b6f3-3593-4f68-b4b0-c30294fcea53",
+              "leftValue": "={{ $json.toX }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "5fae72d4-bf91-4fd1-954f-f070104aa0d3",
+      "name": "Post on X",
+      "type": "n8n-nodes-base.twitter",
+      "typeVersion": 2,
+      "position": [
+        2060,
+        420
+      ],
+      "parameters": {
+        "text": "={{ $('Prepare social posts').item.json.tweetText }}",
+        "additionalFields": {}
+      },
+      "onError": "continueRegularOutput",
+      "credentials": {}
+    },
+    {
+      "id": "fcadb128-f5c5-4792-b43f-714fc8689d66",
+      "name": "Save the X link",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2280,
+        420
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.error ? { error_message: \"X: \" + ($json.error.message || $json.error) } : { x_url: \"https://x.com/i/web/status/\" + ($json.id ?? $json.data?.id) }) }}"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "0a493527-6b31-44d3-9689-e4ec8fc8f0dd",
+      "name": "Post on Reddit?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2500,
+        520
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "070a71ec-fc93-4aac-8c7d-a324f9c06fb8",
+              "leftValue": "={{ $('Prepare social posts').item.json.toReddit }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "527358a8-4bca-482c-8bad-d6c5239ada9e",
+      "name": "Post on Reddit",
+      "type": "n8n-nodes-base.reddit",
+      "typeVersion": 1,
+      "position": [
+        2720,
+        420
+      ],
+      "parameters": {
+        "resource": "post",
+        "operation": "create",
+        "subreddit": "={{ $('Prepare social posts').item.json.subreddit }}",
+        "kind": "={{ $('Prepare social posts').item.json.redditKind }}",
+        "title": "={{ $('Prepare social posts').item.json.redditTitle }}",
+        "url": "={{ $('Prepare social posts').item.json.url }}",
+        "text": "={{ $('Prepare social posts').item.json.redditText }}",
+        "resubmit": true
+      },
+      "onError": "continueRegularOutput",
+      "credentials": {}
+    },
+    {
+      "id": "24974f65-63fb-4567-8faf-98c3f6b7ae65",
+      "name": "Save the Reddit link",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2940,
+        420
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.error ? { error_message: \"Reddit: \" + ($json.error.message || $json.error) } : { reddit_url: $json.url }) }}"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "3eccd891-3cb3-4c7e-a2b6-ad1dcb9d6bf8",
+      "name": "Mark as published",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3160,
+        520
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: \"published\" }) }}"
+      }
+    },
+    {
+      "id": "583e3a40-c372-4302-b441-b07f0c121d5e",
+      "name": "Note 33",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        480,
+        720
+      ],
+      "parameters": {
+        "content": "### Remove from site\nThe post is no longer \"published\", so a rebuild drops it. Posts already on X/Reddit stay there.",
+        "width": 420,
+        "height": 120,
+        "color": 3
+      }
+    },
+    {
+      "id": "0d6488f8-df55-44f9-a8e2-2f618eb5fe0f",
+      "name": "Rebuild without the post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        900
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WORKER_URL }}/build",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WORKER_SECRET }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 600000
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "409a82fc-9c29-4b61-811e-dd2aea7dd446",
+      "name": "Note 35",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1180,
+        760
+      ],
+      "parameters": {
+        "content": "### Errors\nAny failing step lands here: the post gets status **error** and the message, visible in Directus. Fix the cause and set the status again to retry.",
+        "width": 420,
+        "height": 130,
+        "color": 2
+      }
+    },
+    {
+      "id": "211f472d-c94f-46c8-ac2a-89e5339933fc",
+      "name": "Mark as error",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        900
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: \"error\", error_message: String($json.error?.message || $json.error || \"Unknown error\").replace(/ \\[line \\d+\\]$/, \"\").slice(0, 2000) }) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Directus: post changed": {
+      "main": [
+        [
+          {
+            "node": "Read the event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read the event": {
+      "main": [
+        [
+          {
+            "node": "Route by status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by status": {
+      "main": [
+        [
+          {
+            "node": "Mark as processing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get the post to publish",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rebuild without the post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark as processing": {
+      "main": [
+        [
+          {
+            "node": "Get the post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get the post": {
+      "main": [
+        [
+          {
+            "node": "Transcribe audio first?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcribe audio first?": {
+      "main": [
+        [
+          {
+            "node": "Whisper (optional, paid)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get writer settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Whisper (optional, paid)": {
+      "main": [
+        [
+          {
+            "node": "Save the transcript",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark as error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save the transcript": {
+      "main": [
+        [
+          {
+            "node": "Get writer settings",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark as error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get writer settings": {
+      "main": [
+        [
+          {
+            "node": "Build the AI request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build the AI request": {
+      "main": [
+        [
+          {
+            "node": "Ask the AI (OpenRouter)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark as error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask the AI (OpenRouter)": {
+      "main": [
+        [
+          {
+            "node": "Check the AI answer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark as error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check the AI answer": {
+      "main": [
+        [
+          {
+            "node": "Is the slug taken?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark as error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is the slug taken?": {
+      "main": [
+        [
+          {
+            "node": "Use a free slug",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use a free slug": {
+      "main": [
+        [
+          {
+            "node": "Save the draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save the draft": {
+      "main": [
+        [
+          {
+            "node": "Telegram set up?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark as error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram set up?": {
+      "main": [
+        [
+          {
+            "node": "Tell us on Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get the post to publish": {
+      "main": [
+        [
+          {
+            "node": "Ready to publish?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ready to publish?": {
+      "main": [
+        [
+          {
+            "node": "Mark as publishing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark as error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark as publishing": {
+      "main": [
+        [
+          {
+            "node": "Rebuild the site",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rebuild the site": {
+      "main": [
+        [
+          {
+            "node": "Get social settings",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark as error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get social settings": {
+      "main": [
+        [
+          {
+            "node": "Prepare social posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare social posts": {
+      "main": [
+        [
+          {
+            "node": "Post on X?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post on X?": {
+      "main": [
+        [
+          {
+            "node": "Post on X",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Post on Reddit?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post on X": {
+      "main": [
+        [
+          {
+            "node": "Save the X link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save the X link": {
+      "main": [
+        [
+          {
+            "node": "Post on Reddit?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post on Reddit?": {
+      "main": [
+        [
+          {
+            "node": "Post on Reddit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark as published",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post on Reddit": {
+      "main": [
+        [
+          {
+            "node": "Save the Reddit link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save the Reddit link": {
+      "main": [
+        [
+          {
+            "node": "Mark as published",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rebuild without the post": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Mark as error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

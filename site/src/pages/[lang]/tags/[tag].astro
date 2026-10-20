@@ -1,0 +1,30 @@
+---
+import PostList from '../../../components/PostList.astro';
+import { LANGS, type Lang } from '../../../consts';
+import Base from '../../../layouts/Base.astro';
+import { getPosts } from '../../../lib/posts';
+
+export async function getStaticPaths() {
+	const paths = [];
+	for (const lang of LANGS) {
+		const posts = await getPosts(lang);
+		const tags = [...new Set(posts.flatMap((p) => p.data.tags))];
+		paths.push(
+			...tags.map((tag) => ({
+				params: { lang, tag },
+				props: { posts: posts.filter((p) => p.data.tags.includes(tag)) },
+			})),
+		);
+	}
+	return paths;
+}
+
+const lang = Astro.params.lang as Lang;
+const { tag } = Astro.params;
+const { posts } = Astro.props;
+---
+
+<Base lang={lang} title={`#${tag}`}>
+	<h1>#{tag}</h1>
+	<PostList lang={lang} posts={posts} />
+</Base>

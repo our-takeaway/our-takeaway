@@ -1,0 +1,23 @@
+---
+import { SITE, type Lang } from '../../consts';
+import Base from '../../layouts/Base.astro';
+import { langPaths, otherLang, t } from '../../lib/i18n';
+
+export const getStaticPaths = langPaths;
+
+const lang = Astro.params.lang as Lang;
+const site = SITE[lang];
+---
+
+<Base lang={lang} title={t(lang, 'about')} altHref={`/${otherLang(lang)}/about/`}>
+	<article class="post">
+		<header class="post-header"><h1>{t(lang, 'about')}</h1></header>
+		<div class="prose">
+			{site.intro.map((p) => <p>{p}</p>)}
+			<h2>{t(lang, 'howItWorks')}</h2>
+			<p>{t(lang, 'howItWorksText')}</p>
+			<h2>{t(lang, 'authors')}</h2>
+			<ul>{site.authors.map((a) => <li>{a}</li>)}</ul>
+		</div>
+	</article>
+</Base>

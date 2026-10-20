@@ -1,0 +1,11 @@
+---
+import Base from '../layouts/Base.astro';
+import { t } from '../lib/i18n';
+---
+
+<Base lang="en" title={t('en', 'notFound')}>
+	<h1>{t('en', 'notFound')}</h1>
+	<p class="muted"><a href="/en/">{t('en', 'backHome')}</a></p>
+	<h2 lang="fa" dir="rtl">{t('fa', 'notFound')}</h2>
+	<p class="muted" lang="fa" dir="rtl"><a href="/fa/">{t('fa', 'backHome')}</a></p>
+</Base>

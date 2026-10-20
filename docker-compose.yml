@@ -1,0 +1,148 @@
+# Our Takeaway — everything that runs on the VPS.
+#
+#   Directus (CMS)  ──event──▶  n8n (workflow)  ──▶  OpenRouter (AI)
+#        ▲                        │      │
+#        └──── draft / status ────┘      └──▶ worker: rebuild site · Whisper (optional)
+#                                               │
+#   Caddy ◀── /www/current (static site) ◀──────┘
+
+x-pipeline-env: &pipeline-env
+  DIRECTUS_URL: http://directus:8055
+  DIRECTUS_TOKEN: ${DIRECTUS_TOKEN}
+  SITE_URL: https://${SITE_DOMAIN}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: blog
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blog"]
+      interval: 5s
+      retries: 20
+
+  directus:
+    image: directus/directus:12.5.0
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      SECRET: ${DIRECTUS_SECRET}
+      PUBLIC_URL: https://${CMS_DOMAIN}
+      DB_CLIENT: pg
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: directus
+      DB_USER: blog
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      # static token for the admin user, used by n8n, the worker and the setup script
+      ADMIN_TOKEN: ${DIRECTUS_TOKEN}
+      TELEMETRY: "false"
+    volumes:
+      - directus_uploads:/directus/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8055/server/ping || exit 1"]
+      interval: 10s
+      retries: 30
+
+  # Runs once on every `up`: creates the collections, settings and flow if missing.
+  directus-setup:
+    image: node:24-alpine
+    restart: "no"
+    depends_on:
+      directus: { condition: service_healthy }
+    working_dir: /setup
+    command: ["node", "setup.mjs"]
+    environment:
+      DIRECTUS_URL: http://directus:8055
+      DIRECTUS_TOKEN: ${DIRECTUS_TOKEN}
+      N8N_WEBHOOK_URL: http://n8n:5678/webhook/directus-posts
+      N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET}
+    volumes:
+      - ./directus:/setup:ro
+
+  n8n:
+    image: n8nio/n8n:2.43.7
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+    entrypoint: ["/bin/sh", "/bootstrap/start.sh"]
+    environment:
+      <<: *pipeline-env
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: blog
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_HOST: ${N8N_DOMAIN}
+      N8N_PROTOCOL: https
+      WEBHOOK_URL: https://${N8N_DOMAIN}/
+      GENERIC_TIMEZONE: ${TIMEZONE:-Asia/Tehran}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      # the workflow reads its settings from these variables
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      DIRECTUS_PUBLIC_URL: https://${CMS_DOMAIN}
+      WORKER_URL: http://worker:4000
+      WORKER_SECRET: ${WORKER_SECRET}
+      N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      X_ENABLED: ${X_ENABLED:-false}
+      REDDIT_ENABLED: ${REDDIT_ENABLED:-false}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n:/bootstrap:ro
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      directus: { condition: service_healthy }
+    environment:
+      <<: *pipeline-env
+      WORKER_SECRET: ${WORKER_SECRET}
+      TRANSCRIBE_BASE_URL: ${TRANSCRIBE_BASE_URL:-https://api.groq.com/openai/v1}
+      TRANSCRIBE_API_KEY: ${TRANSCRIBE_API_KEY:-}
+      TRANSCRIBE_MODEL: ${TRANSCRIBE_MODEL:-whisper-large-v3}
+      TRANSCRIBE_LANGUAGE: ${TRANSCRIBE_LANGUAGE:-fa}
+    volumes:
+      - www:/www
+    mem_limit: 1200m
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN}
+      CMS_DOMAIN: ${CMS_DOMAIN}
+      N8N_DOMAIN: ${N8N_DOMAIN}
+      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER}
+      N8N_BASIC_AUTH_HASH: ${N8N_BASIC_AUTH_HASH}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - www:/www:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pg_data:
+  directus_uploads:
+  n8n_data:
+  www:
+  caddy_data:
+  caddy_config:

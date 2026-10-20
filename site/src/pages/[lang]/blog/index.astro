@@ -1,0 +1,23 @@
+---
+import PostList from '../../../components/PostList.astro';
+import type { Lang } from '../../../consts';
+import Base from '../../../layouts/Base.astro';
+import { langPaths, otherLang, t } from '../../../lib/i18n';
+import { getPosts } from '../../../lib/posts';
+
+export const getStaticPaths = langPaths;
+
+const lang = Astro.params.lang as Lang;
+const posts = await getPosts(lang);
+const tags = [...new Set(posts.flatMap((p) => p.data.tags))].sort();
+---
+
+<Base lang={lang} title={t(lang, 'allPosts')} altHref={`/${otherLang(lang)}/blog/`}>
+	<h1>{t(lang, 'allPosts')}</h1>
+	{tags.length > 0 && (
+		<p class="tags">
+			{tags.map((tag) => <a class="tag" href={`/${lang}/tags/${encodeURIComponent(tag)}/`}>#{tag}</a>)}
+		</p>
+	)}
+	<PostList lang={lang} posts={posts} />
+</Base>
