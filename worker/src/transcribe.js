@@ -1,80 +1,43 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { run } from './exec.js';
+import { extractAudio } from './audio.js';
+import { downloadSource } from './sources.js';
+import { transcribeWithElevenLabs } from './stt/elevenlabs.js';
+import { transcribeWithWhisper } from './stt/whisper.js';
 
-// Optional step: only used when a post has an audio file and "transcribe with
-// Whisper" is ticked. The default path is a transcript you made yourself for free.
+// recording (Directus upload / Drive link / URL) → voice only → text
+//
+// request: { fileId?, url?, provider?: 'elevenlabs' | 'whisper', language?, keyterms?: string[] }
 
-const cfg = {
-	directusUrl: (process.env.DIRECTUS_URL || '').replace(/\/$/, ''),
-	directusToken: process.env.DIRECTUS_TOKEN || '',
-	baseUrl: (process.env.TRANSCRIBE_BASE_URL || 'https://api.groq.com/openai/v1').replace(/\/$/, ''),
-	apiKey: process.env.TRANSCRIBE_API_KEY || '',
-	model: process.env.TRANSCRIBE_MODEL || 'whisper-large-v3',
-	language: process.env.TRANSCRIBE_LANGUAGE || 'fa',
-	prompt: process.env.TRANSCRIBE_PROMPT || '',
-	chunkSeconds: Number(process.env.TRANSCRIBE_CHUNK_SECONDS || 1200),
-};
-
-async function downloadFromDirectus(fileId, dest) {
-	if (!/^[\w-]+$/.test(fileId)) throw new Error('bad file id');
-	const res = await fetch(`${cfg.directusUrl}/assets/${fileId}`, {
-		headers: { Authorization: `Bearer ${cfg.directusToken}` },
-	});
-	if (!res.ok) throw new Error(`could not download file ${fileId} from Directus (${res.status})`);
-	await fs.writeFile(dest, Buffer.from(await res.arrayBuffer()));
+// ElevenLabs keyterm rules: ≤1000 terms, each <50 chars and ≤5 words, no <>{}[]\
+function cleanKeyterms(list) {
+	const seen = new Set();
+	return (Array.isArray(list) ? list : [])
+		.map((t) => String(t).replace(/[<>{}[\]\\]/g, ' ').replace(/\s+/g, ' ').trim())
+		.filter((t) => t && t.length < 50 && t.split(' ').length <= 5 && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase()))
+		.slice(0, 1000);
 }
 
-// Small mono Opus chunks keep every request under the ~25MB API upload limit.
-async function splitAudio(file, outDir) {
-	await run('ffmpeg', [
-		'-hide_banner', '-loglevel', 'error', '-y',
-		'-i', file,
-		'-vn', '-ac', '1', '-ar', '16000', '-c:a', 'libopus', '-b:a', '24k',
-		'-f', 'segment', '-segment_time', String(cfg.chunkSeconds), '-reset_timestamps', '1',
-		path.join(outDir, 'part%03d.ogg'),
-	], { timeoutMs: 30 * 60 * 1000 });
-	return (await fs.readdir(outDir)).filter((f) => f.startsWith('part')).sort().map((f) => path.join(outDir, f));
-}
-
-async function transcribeChunk(file, previousText) {
-	const form = new FormData();
-	form.append('file', new Blob([await fs.readFile(file)], { type: 'audio/ogg' }), path.basename(file));
-	form.append('model', cfg.model);
-	form.append('response_format', 'json');
-	if (cfg.language) form.append('language', cfg.language);
-	// The tail of the previous chunk keeps names and terms consistent across chunks.
-	const prompt = [cfg.prompt, previousText.slice(-500)].filter(Boolean).join('\n');
-	if (prompt) form.append('prompt', prompt);
-
-	for (let attempt = 1; ; attempt++) {
-		const res = await fetch(`${cfg.baseUrl}/audio/transcriptions`, {
-			method: 'POST',
-			headers: { Authorization: `Bearer ${cfg.apiKey}` },
-			body: form,
-		});
-		if (res.ok) return ((await res.json()).text || '').trim();
-		const body = await res.text();
-		if ((res.status === 429 || res.status >= 500) && attempt < 4) {
-			await new Promise((r) => setTimeout(r, attempt * 10_000));
-			continue;
-		}
-		throw new Error(`transcription failed (${res.status}): ${body.slice(0, 500)}`);
-	}
-}
-
-export async function transcribeFile(fileId) {
-	if (!cfg.apiKey) throw new Error('TRANSCRIBE_API_KEY is not set');
+export async function transcribe({ fileId, url, provider = 'elevenlabs', language, keyterms }) {
+	if (!fileId && !url) throw Object.assign(new Error('Send a fileId or a url.'), { status: 400 });
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'transcribe-'));
+	const started = Date.now();
 	try {
 		const source = path.join(dir, 'source');
-		await downloadFromDirectus(fileId, source);
-		const chunks = await splitAudio(source, dir);
-		if (!chunks.length) throw new Error('ffmpeg found no audio in this file');
-		const parts = [];
-		for (const chunk of chunks) parts.push(await transcribeChunk(chunk, parts.join(' ')));
-		return parts.join('\n\n');
+		await downloadSource({ fileId, url }, source);
+		const audio = await extractAudio(source, path.join(dir, 'voice.ogg'));
+		await fs.rm(source, { force: true }); // free the disk before the slow part
+
+		const opts = { language: language?.trim() || undefined, keyterms: cleanKeyterms(keyterms) };
+		const text =
+			provider === 'whisper'
+				? await transcribeWithWhisper(audio, dir, opts)
+				: await transcribeWithElevenLabs(audio, opts);
+		if (!text.trim()) throw new Error('The transcription came back empty. Is there speech in the recording?');
+
+		console.log(`transcribed with ${provider} in ${Math.round((Date.now() - started) / 1000)}s (${text.length} chars)`);
+		return text;
 	} finally {
 		await fs.rm(dir, { recursive: true, force: true });
 	}

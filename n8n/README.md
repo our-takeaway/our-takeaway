@@ -8,19 +8,21 @@ Directus: post changed → Read the event → Route by status ─┬─ Write   
                                                            └─ Remove   (archived)
 ```
 
-## Write: transcript → AI draft
+## Write: recording → transcript → AI draft
 
 | Node | What it does |
 |---|---|
-| Mark as processing | status → `processing`, so you can see in Directus that the AI is working |
-| Get the post | reads the post (transcript, notes, feedback…) |
-| Transcribe audio first? | only true when there is **no transcript**, there **is** an audio file, and "Transcribe the audio" is ticked |
-| Whisper (optional, paid) | asks the worker to transcribe the audio (`POST worker:4000/transcribe`) |
-| Save the transcript | stores the Whisper text on the post |
-| Get writer settings | reads the prompt, model and social language from **Writer Settings** in Directus |
+| Mark as processing | status → `processing`, so you can see in Directus that something is happening |
+| Get the post | reads the post (recording, Drive link, transcript, notes, feedback…) |
+| Get writer settings | reads the prompt, model, transcription provider/language and key terms from **Writer Settings** in Directus |
+| Transcribe the recording? | true when there is **no transcript** but there **is** an uploaded recording or a link |
+| Mark as transcribing | status → `transcribing` |
+| Transcribe the recording | `POST worker:4000/transcribe`: the worker downloads the upload or Drive link, keeps only the voice with ffmpeg, and sends it to ElevenLabs Scribe v2 (or Whisper). Returns text with `[mm:ss] Speaker n:` turns |
+| Save the transcript | stores the text on the post, status → `processing` |
 | Build the AI request | builds the OpenRouter request: system prompt + meeting material (+ current draft and feedback when revising) and the JSON schema of the answer |
 | Ask the AI (OpenRouter) | `POST openrouter.ai/api/v1/chat/completions` |
 | Check the AI answer | parses the JSON, makes sure both languages are there, cleans the slug and tags |
+| Is the slug taken? / Use a free slug | adds the post number to the slug if another post already uses it |
 | Save the draft | writes both languages and the social texts, status → `review` |
 | Telegram set up? / Tell us on Telegram | optional message with a link to the draft |
 
@@ -48,7 +50,7 @@ Every risky step has a red error output wired to **Mark as error**. It sets stat
 
 ## Why our own updates don't loop
 
-n8n writes statuses back to Directus (`processing`, `review`, `publishing`, `published`, `error`), and Directus sends each of those changes back here. *Route by status* only reacts to `new`, `revise`, `approved` and `archived`, which only a person sets, so those events simply end there.
+n8n writes statuses back to Directus (`processing`, `transcribing`, `review`, `publishing`, `published`, `error`), and Directus sends each of those changes back here. *Route by status* only reacts to `new`, `revise`, `approved` and `archived`, which only a person sets, so those events simply end there.
 
 ## Changing the workflow
 
@@ -63,3 +65,11 @@ docker compose cp n8n:/tmp/blog-pipeline.json n8n/workflows/blog-pipeline.json
 ```
 
 Settings that are secrets or differ per server (Directus token, OpenRouter key, worker secret, site URL…) come from environment variables (`$env.…` in the nodes), set in `.env`.
+
+### Loading a newer version from this repo onto the server
+
+This **replaces** the workflow in n8n with the file from the repo, so save any edits you made in the n8n editor first (export above).
+
+```bash
+docker compose exec n8n n8n import:workflow --input=/bootstrap/workflows/blog-pipeline.json && docker compose exec n8n n8n publish:workflow --id=BlogPipeline0001 && docker compose restart n8n
+```

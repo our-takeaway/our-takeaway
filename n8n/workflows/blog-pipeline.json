@@ -157,8 +157,8 @@
         -80
       ],
       "parameters": {
-        "content": "### Write the draft\nTranscript → (optional Whisper) → prompt from **writer_settings** in Directus → OpenRouter → save both languages + social texts → status **review**.",
-        "width": 420,
+        "content": "### Write the draft\nRecording (upload or Google Drive link) → worker keeps only the voice → **ElevenLabs** (or Whisper) → transcript. Then prompt from **writer_settings** in Directus → OpenRouter → save both languages + social texts → status **review**. A pasted transcript skips the transcription.",
+        "width": 520,
         "height": 140,
         "color": 5
       }
@@ -216,11 +216,11 @@
     },
     {
       "id": "e4d63091-b980-4f89-b56f-6a0cc803f3e5",
-      "name": "Transcribe audio first?",
+      "name": "Transcribe the recording?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        960,
+        1180,
         100
       ],
       "parameters": {
@@ -234,7 +234,7 @@
           "conditions": [
             {
               "id": "3840ab88-b039-4568-b0a8-0558c5789548",
-              "leftValue": "={{ !$json.data.transcript?.trim() && !!$json.data.audio && $json.data.transcribe_audio === true }}",
+              "leftValue": "={{ !$('Get the post').item.json.data.transcript?.trim() && (!!$('Get the post').item.json.data.audio || !!$('Get the post').item.json.data.recording_url?.trim()) }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
@@ -251,11 +251,11 @@
     },
     {
       "id": "4182a692-cdb5-4404-9150-dea9394e7435",
-      "name": "Whisper (optional, paid)",
+      "name": "Transcribe the recording",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1180,
+        1620,
         -20
       ],
       "parameters": {
@@ -275,7 +275,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ fileId: $json.data.audio }) }}"
+        "jsonBody": "={{ JSON.stringify({ fileId: $('Get the post').item.json.data.audio || null, url: $('Get the post').item.json.data.audio ? null : ($('Get the post').item.json.data.recording_url || '').trim(), provider: $('Get writer settings').item.json.data.transcription_provider || \"elevenlabs\", language: $('Get writer settings').item.json.data.transcription_language || null, keyterms: [...($('Get writer settings').item.json.data.keyterms || []), ...($('Get the post').item.json.data.keyterms || [])] }) }}"
       },
       "onError": "continueErrorOutput"
     },
@@ -285,7 +285,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1400,
+        1840,
         -20
       ],
       "parameters": {
@@ -303,7 +303,7 @@
         "options": {},
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ transcript: $json.text }) }}"
+        "jsonBody": "={{ JSON.stringify({ transcript: $json.text, status: \"processing\" }) }}"
       },
       "onError": "continueErrorOutput"
     },
@@ -313,7 +313,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1620,
+        960,
         100
       ],
       "parameters": {
@@ -337,12 +337,12 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1840,
+        2060,
         100
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// Everything the AI needs: instructions from Directus + this meeting's material.\nconst settings = $json.data;\nconst post = $('Get the post').item.json.data;\nconst whisper = $('Save the transcript').isExecuted ? $('Save the transcript').item.json.data : null;\nconst transcript = (whisper?.transcript ?? post.transcript ?? '').trim();\nif (!transcript) throw new Error('No transcript. Paste one into the post, or attach audio and tick \"Transcribe the audio\".');\n\nconst status = $('Read the event').item.json.status;\nconst revising = status === 'revise' && post.feedback?.trim() && post.body_fa;\n\nconst meeting = [\n  post.title ? `Working title: ${post.title}` : '',\n  post.meeting_number != null ? `Meeting number: ${post.meeting_number}` : '',\n  `Date: ${(post.date_created || new Date().toISOString()).slice(0, 10)}`,\n  post.notes ? `Notes from the hosts:\\n${post.notes}` : '',\n].filter(Boolean).join('\\n');\nconst material = [\n  `Social language: ${settings.social_language || 'en'}`,\n  `<meeting>\\n${meeting}\\n</meeting>`,\n  `<transcript>\\n${transcript}\\n</transcript>`,\n];\nif (revising) {\n  const current = {};\n  for (const k of ['slug','title_fa','description_fa','tags_fa','body_fa','title_en','description_en','tags_en','body_en','tweet','reddit_title','reddit_body']) current[k] = post[k];\n  material.push(`<current_draft>\\n${JSON.stringify(current, null, 2)}\\n</current_draft>`);\n  material.push(`<reviewer_feedback>\\n${post.feedback}\\n</reviewer_feedback>`);\n}\n\nconst str = { type: 'string' };\nconst list = { type: 'array', items: str };\nconst fields = { slug: str, title_fa: str, description_fa: str, tags_fa: list, body_fa: str, title_en: str, description_en: str, tags_en: list, body_en: str, tweet: str, reddit_title: str, reddit_body: str };\n\nreturn {\n  json: {\n    request: {\n      model: settings.model || 'deepseek/deepseek-v4-flash-0731',\n      max_tokens: 32000,\n      messages: [\n        { role: 'system', content: settings.system_prompt },\n        { role: 'user', content: material.join('\\n\\n') },\n      ],\n      response_format: {\n        type: 'json_schema',\n        json_schema: { name: 'blog_post', strict: true, schema: { type: 'object', properties: fields, required: Object.keys(fields), additionalProperties: false } },\n      },\n    },\n  },\n};"
+        "jsCode": "// Everything the AI needs: instructions from Directus + this meeting's material.\nconst settings = $('Get writer settings').item.json.data;\nconst post = $('Get the post').item.json.data;\nconst whisper = $('Save the transcript').isExecuted ? $('Save the transcript').item.json.data : null;\nconst transcript = (whisper?.transcript ?? post.transcript ?? '').trim();\nif (!transcript) throw new Error('No transcript. Upload a recording, paste a Google Drive link, or paste a transcript.');\n\nconst status = $('Read the event').item.json.status;\nconst revising = status === 'revise' && post.feedback?.trim() && post.body_fa;\n\nconst meeting = [\n  post.title ? `Working title: ${post.title}` : '',\n  post.meeting_number != null ? `Meeting number: ${post.meeting_number}` : '',\n  `Date: ${(post.date_created || new Date().toISOString()).slice(0, 10)}`,\n  post.notes ? `Notes from the hosts:\\n${post.notes}` : '',\n].filter(Boolean).join('\\n');\nconst material = [\n  `Social language: ${settings.social_language || 'en'}`,\n  `<meeting>\\n${meeting}\\n</meeting>`,\n  `<transcript>\\n${transcript}\\n</transcript>`,\n];\nif (revising) {\n  const current = {};\n  for (const k of ['slug','title_fa','description_fa','tags_fa','body_fa','title_en','description_en','tags_en','body_en','tweet','reddit_title','reddit_body']) current[k] = post[k];\n  material.push(`<current_draft>\\n${JSON.stringify(current, null, 2)}\\n</current_draft>`);\n  material.push(`<reviewer_feedback>\\n${post.feedback}\\n</reviewer_feedback>`);\n}\n\nconst str = { type: 'string' };\nconst list = { type: 'array', items: str };\nconst fields = { slug: str, title_fa: str, description_fa: str, tags_fa: list, body_fa: str, title_en: str, description_en: str, tags_en: list, body_en: str, tweet: str, reddit_title: str, reddit_body: str };\n\nreturn {\n  json: {\n    request: {\n      model: settings.model || 'deepseek/deepseek-v4-flash-0731',\n      max_tokens: 32000,\n      messages: [\n        { role: 'system', content: settings.system_prompt },\n        { role: 'user', content: material.join('\\n\\n') },\n      ],\n      response_format: {\n        type: 'json_schema',\n        json_schema: { name: 'blog_post', strict: true, schema: { type: 'object', properties: fields, required: Object.keys(fields), additionalProperties: false } },\n      },\n    },\n  },\n};"
       },
       "onError": "continueErrorOutput"
     },
@@ -352,7 +352,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2060,
+        2280,
         100
       ],
       "parameters": {
@@ -386,7 +386,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2280,
+        2500,
         100
       ],
       "parameters": {
@@ -401,7 +401,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2500,
+        2720,
         100
       ],
       "parameters": {
@@ -425,7 +425,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2720,
+        2940,
         100
       ],
       "parameters": {
@@ -439,7 +439,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2940,
+        3160,
         100
       ],
       "parameters": {
@@ -467,7 +467,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        3160,
+        3380,
         100
       ],
       "parameters": {
@@ -502,7 +502,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        3380,
+        3600,
         100
       ],
       "parameters": {
@@ -942,6 +942,33 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ status: \"error\", error_message: String($json.error?.message || $json.error || \"Unknown error\").replace(/ \\[line \\d+\\]$/, \"\").slice(0, 2000) }) }}"
       }
+    },
+    {
+      "id": "7abe3aa8-7ce4-49a7-87a8-3f47a56c5a7e",
+      "name": "Mark as transcribing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        -20
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: \"transcribing\" }) }}"
+      }
     }
   ],
   "connections": {
@@ -1007,43 +1034,7 @@
       "main": [
         [
           {
-            "node": "Transcribe audio first?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Transcribe audio first?": {
-      "main": [
-        [
-          {
-            "node": "Whisper (optional, paid)",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
             "node": "Get writer settings",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Whisper (optional, paid)": {
-      "main": [
-        [
-          {
-            "node": "Save the transcript",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Mark as error",
             "type": "main",
             "index": 0
           }
@@ -1054,7 +1045,7 @@
       "main": [
         [
           {
-            "node": "Get writer settings",
+            "node": "Build the AI request",
             "type": "main",
             "index": 0
           }
@@ -1072,7 +1063,7 @@
       "main": [
         [
           {
-            "node": "Build the AI request",
+            "node": "Transcribe the recording?",
             "type": "main",
             "index": 0
           }
@@ -1350,6 +1341,53 @@
         [
           {
             "node": "Mark as error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcribe the recording?": {
+      "main": [
+        [
+          {
+            "node": "Mark as transcribing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build the AI request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcribe the recording": {
+      "main": [
+        [
+          {
+            "node": "Save the transcript",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark as error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark as transcribing": {
+      "main": [
+        [
+          {
+            "node": "Transcribe the recording",
             "type": "main",
             "index": 0
           }

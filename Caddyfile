@@ -23,8 +23,9 @@
 
 # ── Directus: where we review and edit posts ────────────────────────────────
 {$CMS_DOMAIN} {
+	# meeting recordings (video too) can be large
 	request_body {
-		max_size 1GB
+		max_size 5GB
 	}
 	reverse_proxy directus:8055
 }

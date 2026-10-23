@@ -66,6 +66,7 @@ const choices = (list) => list.map(([value, text, color]) => ({ value, text, col
 
 const STATUS = choices([
 	['new', 'New — waiting for AI', '#A2B5CD'],
+	['transcribing', 'Transcribing the recording…', '#3399FF'],
 	['processing', 'AI is working…', '#3399FF'],
 	['review', 'Ready for review', '#FFA439'],
 	['revise', 'Revise with AI (uses Feedback)', '#9B51E0'],
@@ -92,10 +93,27 @@ const postFields = [
 	group('input_group', '1 · Meeting (input)'),
 	field('title', 'string', { interface: 'input', group: 'input_group', width: 'half', note: 'Working title (optional)' }),
 	field('meeting_number', 'integer', { interface: 'input', group: 'input_group', width: 'half' }),
-	field('transcript', 'text', { interface: 'input-multiline', group: 'input_group', note: 'Paste the transcript here (from Meet, Zoom, or a free local tool). Saving a new post starts the AI.' }),
-	field('notes', 'text', { interface: 'input-multiline', group: 'input_group', note: 'Optional notes for the AI: what to focus on, correct spelling of names and terms, what to leave out.' }),
-	field('audio', 'uuid', { interface: 'file', special: ['file'], group: 'input_group', width: 'half', note: 'Optional: recording, only used if the box on the right is ticked and there is no transcript.' }),
-	field('transcribe_audio', 'boolean', { interface: 'boolean', special: ['cast-boolean'], group: 'input_group', width: 'half', options: { label: 'Transcribe the audio with Whisper (paid)' } }, { default_value: false }),
+	field('audio', 'uuid', {
+		interface: 'file', special: ['file'], group: 'input_group', width: 'half',
+		translations: [{ language: 'en-US', translation: 'Recording (audio or video)' }],
+		note: 'Upload the meeting recording. Video is fine: only the sound is used.',
+	}),
+	field('recording_url', 'string', {
+		interface: 'input', group: 'input_group', width: 'half',
+		translations: [{ language: 'en-US', translation: 'Or a Google Drive link' }],
+		options: { placeholder: 'https://drive.google.com/file/d/…' },
+		note: 'Share the file as "Anyone with the link". Any direct link to an audio/video file works too.',
+	}),
+	field('transcript', 'text', {
+		interface: 'input-multiline', group: 'input_group',
+		note: 'Filled in automatically from the recording (ElevenLabs). You can also paste a transcript yourself; then the recording is not used.',
+	}),
+	field('keyterms', 'json', {
+		interface: 'tags', special: ['cast-json'], group: 'input_group',
+		translations: [{ language: 'en-US', translation: 'Names and terms' }],
+		note: 'Names and technical terms said in this meeting, so the transcription spells them right (press Enter after each).',
+	}),
+	field('notes', 'text', { interface: 'input-multiline', group: 'input_group', note: 'Optional notes for the AI writer: what to focus on, what to leave out.' }),
 	field('feedback', 'text', { interface: 'input-multiline', group: 'input_group', note: 'What should the AI change? Write it here, then set status to "Revise with AI".' }),
 
 	group('fa_group', '2 · فارسی'),
@@ -140,6 +158,21 @@ const settingsFields = [
 		options: { choices: [{ text: 'Link post', value: 'link' }, { text: 'Text post', value: 'self' }] },
 		width: 'half',
 	}, { default_value: 'link' }),
+	field('transcription_provider', 'string', {
+		interface: 'select-dropdown',
+		options: { choices: [{ text: 'ElevenLabs Scribe (best for Persian)', value: 'elevenlabs' }, { text: 'Whisper (cheaper backup)', value: 'whisper' }] },
+		note: 'Service that turns recordings into text.',
+		width: 'half',
+	}, { default_value: 'elevenlabs' }),
+	field('transcription_language', 'string', {
+		interface: 'input', width: 'half', options: { placeholder: 'auto' },
+		note: 'Leave empty to detect automatically (best for Persian mixed with English), or e.g. fa / en.',
+	}),
+	field('keyterms', 'json', {
+		interface: 'tags', special: ['cast-json'],
+		translations: [{ language: 'en-US', translation: 'Names and terms (every meeting)' }],
+		note: 'Names and terms that come up in most meetings, e.g. your names, tools you use. Added to every transcription.',
+	}),
 	field('system_prompt', 'text', { interface: 'input-rich-text-md', note: 'Instructions the AI follows when writing every post. Edit to change tone and structure.' }),
 ];
 
@@ -161,6 +194,23 @@ async function ensureCollection(name, meta, fields) {
 		if (have.has(f.field)) continue;
 		await api('POST', `/fields/${name}`, f);
 		console.log(`  + ${name}.${f.field}`);
+	}
+}
+
+// Fields whose look or wording changed after the first install: keep them in step
+// with this file. Only these are touched, so changes you make to others in the
+// Directus UI are kept. Fields listed in REMOVED are deleted (with their data).
+const SYNCED = { posts: ['status', 'audio', 'recording_url', 'transcript', 'keyterms', 'notes', 'feedback', 'title', 'meeting_number'] };
+const REMOVED = { posts: ['transcribe_audio'] };
+
+async function syncFields(name, fields) {
+	const have = new Set((await api('GET', `/fields/${name}`)).map((f) => f.field));
+	for (const f of fields.filter((f) => SYNCED[name]?.includes(f.field) && have.has(f.field))) {
+		await api('PATCH', `/fields/${name}/${f.field}`, { meta: f.meta });
+	}
+	for (const gone of (REMOVED[name] || []).filter((f) => have.has(f))) {
+		await api('DELETE', `/fields/${name}/${gone}`);
+		console.log(`  - ${name}.${gone}`);
 	}
 }
 
@@ -232,11 +282,13 @@ async function ensureFlow() {
 await waitForDirectus();
 await ensureCollection('posts', {
 	icon: 'article',
-	note: 'Each meeting becomes one post. Paste a transcript and save to start.',
+	note: 'Each meeting becomes one post. Upload the recording (or paste a Drive link or a transcript) and save to start.',
 	display_template: '{{title}} — {{title_fa}}',
 	sort_field: null,
 	archive_field: null,
 }, postFields);
+await syncFields('posts', postFields);
+await api('PATCH', '/collections/posts', { meta: { note: 'Each meeting becomes one post. Upload the recording (or paste a Drive link or a transcript) and save to start.' } });
 await ensureFileRelation();
 await ensureListView();
 await ensureCollection('writer_settings', { icon: 'smart_toy', singleton: true, note: 'How the AI writes posts' }, settingsFields);

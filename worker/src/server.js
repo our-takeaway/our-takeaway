@@ -1,11 +1,12 @@
 import { timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
 import { buildSite, hasLiveSite } from './build.js';
-import { transcribeFile } from './transcribe.js';
+import { transcribe } from './transcribe.js';
 
 // The worker does the two jobs n8n can't do on its own:
-//   POST /build       rebuild the static site from Directus   → { release, posts }
-//   POST /transcribe  { fileId } audio → text with Whisper     → { text }
+//   POST /build       rebuild the static site from Directus          → { release, posts }
+//   POST /transcribe  { fileId | url, provider, language, keyterms } → { text }
+//                     recording (upload, Google Drive link, URL) → voice only → ElevenLabs or Whisper
 // Both require "Authorization: Bearer $WORKER_SECRET". Only reachable inside Docker.
 
 const PORT = Number(process.env.PORT || 4000);
@@ -38,11 +39,7 @@ function send(res, status, data) {
 
 const routes = {
 	'POST /build': async () => queueBuild(),
-	'POST /transcribe': async (req) => {
-		const { fileId } = await readJson(req);
-		if (!fileId) throw Object.assign(new Error('fileId is required'), { status: 400 });
-		return { text: await transcribeFile(fileId) };
-	},
+	'POST /transcribe': async (req) => ({ text: await transcribe(await readJson(req)) }),
 };
 
 http

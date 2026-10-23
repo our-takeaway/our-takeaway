@@ -112,10 +112,10 @@ services:
     environment:
       <<: *pipeline-env
       WORKER_SECRET: ${WORKER_SECRET}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       TRANSCRIBE_BASE_URL: ${TRANSCRIBE_BASE_URL:-https://api.groq.com/openai/v1}
       TRANSCRIBE_API_KEY: ${TRANSCRIBE_API_KEY:-}
       TRANSCRIBE_MODEL: ${TRANSCRIBE_MODEL:-whisper-large-v3}
-      TRANSCRIBE_LANGUAGE: ${TRANSCRIBE_LANGUAGE:-fa}
     volumes:
       - www:/www
     mem_limit: 1200m
