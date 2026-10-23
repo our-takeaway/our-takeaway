@@ -120,6 +120,15 @@ services:
       - www:/www
     mem_limit: 1200m
 
+  # Private search engine (no public port), reachable inside Docker at http://searxng:8080
+  searxng:
+    image: ghcr.io/searxng/searxng:latest
+    restart: unless-stopped
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET}
+    volumes:
+      - ./searxng-settings.yml:/etc/searxng/settings.yml
+
   caddy:
     image: caddy:2
     restart: unless-stopped

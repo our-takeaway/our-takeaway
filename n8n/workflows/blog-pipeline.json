@@ -940,7 +940,7 @@
         "options": {},
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ status: \"error\", error_message: String($json.error?.message || $json.error || \"Unknown error\").replace(/ \\[line \\d+\\]$/, \"\").slice(0, 2000) }) }}"
+        "jsonBody": "={{ JSON.stringify({ status: \"error\", error_message: (m => (m.match(/message\\\\?\"\\s*:\\s*\\\\?\"(.+?)\\\\?\"/) || m.match(/error\\\\?\"\\s*:\\s*\\\\?\"(.+?)\\\\?\"\\s*\\}/) || [])[1] || m)(String($json.error?.message || $json.error || \"Unknown error\").replace(/ \\[line \\d+\\]$/, \"\")).slice(0, 2000) }) }}"
       }
     },
     {

@@ -21,6 +21,11 @@
 	}
 }
 
+# Redirect www to the canonical domain
+www.{$SITE_DOMAIN} {
+	redir https://{$SITE_DOMAIN}{uri} permanent
+}
+
 # ── Directus: where we review and edit posts ────────────────────────────────
 {$CMS_DOMAIN} {
 	# meeting recordings (video too) can be large
