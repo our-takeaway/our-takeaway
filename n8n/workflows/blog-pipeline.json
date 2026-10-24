@@ -1,31 +1,31 @@
 {
   "id": "BlogPipeline0001",
-  "name": "Blog pipeline",
+  "name": "Post pipeline",
   "nodes": [
     {
-      "id": "357d7e26-c401-4c82-afb7-93f843c83cf9",
-      "name": "Note 0",
+      "id": "024607a7-27a9-3dc7-33e3-cb55c98317cb",
+      "name": "Note: overview",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        -260,
-        -420
+        -320,
+        -560
       ],
       "parameters": {
-        "content": "## Blog pipeline\nDirectus sends every change to a **post** here. We look at the new **status** and pick a path:\n- **new / revise** → AI writes the draft (top row)\n- **approved** → rebuild the site, post on X and Reddit (middle row)\n- **archived** → rebuild the site without it (bottom row)\n\nEverything else (processing, review, published…) is ignored, so our own status updates never loop.",
-        "width": 520,
+        "content": "## Post pipeline\nDirectus sends every change to a **post** here. The new **status** decides what runs:\n- **new** → transcription → writing (meeting language) → translation → *review*\n- **revise** → writing with your feedback → translation\n- **retry** → from the step that failed (or \"Restart from\")\n- **approved** → publish · **archived** → remove from site\n\nEvery step reports to the worker (**Report: …** nodes): status, progress log, Telegram. Any failure anywhere is caught by the **Pipeline errors** workflow.",
+        "width": 560,
         "height": 300,
         "color": 4
       }
     },
     {
-      "id": "18064e53-76e4-4dea-bf8b-d1bb756c4ea8",
+      "id": "a81a1a07-6d15-9f63-f620-5b07ba2bccc6",
       "name": "Directus: post changed",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
-        -200,
-        300
+        -260,
+        200
       ],
       "parameters": {
         "httpMethod": "POST",
@@ -33,30 +33,95 @@
         "responseMode": "onReceived",
         "options": {}
       },
-      "webhookId": "7121b82d-1776-422f-84fc-1b18833fbf61"
+      "webhookId": "c33a58f3-c61b-7766-ff7f-70c098e10eea"
     },
     {
-      "id": "a4a34560-19c5-45ff-9214-9b89ec147160",
-      "name": "Read the event",
+      "id": "f97298fb-99c3-d226-5787-62bed6d10aa0",
+      "name": "Decide what to run",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        20,
-        300
+        -40,
+        200
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Directus Flow sends: { event, keys | key, payload, collection }\nconst out = [];\nfor (const item of $input.all()) {\n  const secret = item.json.headers['x-webhook-secret'];\n  if (!secret || secret !== $env.N8N_WEBHOOK_SECRET) throw new Error('Wrong webhook secret');\n\n  const body = item.json.body;\n  const ids = body.keys ?? (body.key != null ? [body.key] : []);\n  const created = String(body.event).endsWith('.create');\n  // A new post counts as \"new\" even if the form didn't send the status.\n  const status = body.payload?.status ?? (created ? 'new' : null);\n\n  // One item per post (bulk edits can touch several at once).\n  for (const id of ids) out.push({ json: { id, status } });\n}\nreturn out;"
+        "jsCode": "// Directus Flow sends { event, keys | key, payload }. Only statuses a person sets start work;\n// the ones the automation writes (transcribing, writing, review, …) end here, so nothing loops.\nconst ACT = ['new', 'revise', 'retry', 'approved', 'archived'];\nconst out = [];\nfor (const item of $input.all()) {\n  const secret = item.json.headers['x-webhook-secret'];\n  if (!secret || secret !== $env.N8N_WEBHOOK_SECRET) throw new Error('Wrong webhook secret');\n  const body = item.json.body;\n  const ids = body.keys ?? (body.key != null ? [body.key] : []);\n  const created = String(body.event).endsWith('.create');\n  const status = body.payload?.status ?? (created ? 'new' : null);\n  if (ACT.includes(status)) for (const id of ids) out.push({ json: { id, status } });\n}\nreturn out;"
       }
     },
     {
-      "id": "ec8442bc-2cbc-4d43-b514-671ef60b7c92",
-      "name": "Route by status",
+      "id": "d53e82d8-2246-77f1-a61c-6c06c03245d0",
+      "name": "Get the post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        180,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "0fd4619b-06c3-27bf-02a8-823e27758c98",
+      "name": "Where to start",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        200
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const ev = $('Decide what to run').item.json;\nconst post = $json.data;\nconst hasSource = Boolean(post.transcript_file || post.audio || post.recording_url?.trim());\nlet route = null, start = null, force = false;\nif (ev.status === 'new') { route = 'generate'; start = 'transcribe'; }\nif (ev.status === 'revise') { route = 'generate'; start = 'write'; }\nif (ev.status === 'approved') route = 'publish';\nif (ev.status === 'archived') route = 'remove';\nif (ev.status === 'retry') {\n  const from = post.restart_from || post.error_stage || post.current_stage || 'transcribe';\n  if (from === 'publish' || from === 'remove') route = from;\n  else { route = 'generate'; start = from; force = post.restart_from === 'transcribe' && hasSource; }\n}\nreturn { json: { id: post.id, status: ev.status, route, start, force } };"
+      }
+    },
+    {
+      "id": "b166bab7-fc12-55c6-b718-2b064dd73eb9",
+      "name": "Claim this run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        620,
+        200
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Where to start').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ run_id: String($execution.id), restart_from: null }) }}"
+      }
+    },
+    {
+      "id": "70f5f7e3-3252-ec35-4180-1ce47f2b2b09",
+      "name": "Route",
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3.2,
       "position": [
-        240,
-        300
+        840,
+        200
       ],
       "parameters": {
         "rules": {
@@ -71,28 +136,19 @@
                 },
                 "conditions": [
                   {
-                    "id": "e96798b8-219f-4eab-b940-51e97af2889a",
-                    "leftValue": "={{ $json.status }}",
-                    "rightValue": "new",
-                    "operator": {
-                      "type": "string",
-                      "operation": "equals"
-                    }
-                  },
-                  {
-                    "id": "a45c1753-fccb-412e-847d-563fd8297e5d",
-                    "leftValue": "={{ $json.status }}",
-                    "rightValue": "revise",
+                    "id": "ac036077-f901-d1d7-3977-4ebd3547e078",
+                    "leftValue": "={{ $('Where to start').item.json.route }}",
+                    "rightValue": "generate",
                     "operator": {
                       "type": "string",
                       "operation": "equals"
                     }
                   }
                 ],
-                "combinator": "or"
+                "combinator": "and"
               },
               "renameOutput": true,
-              "outputKey": "Write"
+              "outputKey": "Generate"
             },
             {
               "conditions": {
@@ -104,16 +160,16 @@
                 },
                 "conditions": [
                   {
-                    "id": "892a9129-8f8b-45e6-b17b-87b665b4ecd6",
-                    "leftValue": "={{ $json.status }}",
-                    "rightValue": "approved",
+                    "id": "32b5bfb0-45d9-e67e-f36e-c9ae89783894",
+                    "leftValue": "={{ $('Where to start').item.json.route }}",
+                    "rightValue": "publish",
                     "operator": {
                       "type": "string",
                       "operation": "equals"
                     }
                   }
                 ],
-                "combinator": "or"
+                "combinator": "and"
               },
               "renameOutput": true,
               "outputKey": "Publish"
@@ -128,16 +184,16 @@
                 },
                 "conditions": [
                   {
-                    "id": "0a9da3e6-4a23-45d1-baa6-c1e90a197573",
-                    "leftValue": "={{ $json.status }}",
-                    "rightValue": "archived",
+                    "id": "be173786-402c-d9eb-f1ff-18cc2eb69b96",
+                    "leftValue": "={{ $('Where to start').item.json.route }}",
+                    "rightValue": "remove",
                     "operator": {
                       "type": "string",
                       "operation": "equals"
                     }
                   }
                 ],
-                "combinator": "or"
+                "combinator": "and"
               },
               "renameOutput": true,
               "outputKey": "Remove"
@@ -148,80 +204,29 @@
       }
     },
     {
-      "id": "7e69b27a-5b3e-4767-af57-733f6c499f7b",
-      "name": "Note 4",
+      "id": "3fd4c4c6-0b3c-b0fa-0a92-e75c9081d502",
+      "name": "Note: transcribe",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        480,
-        -80
+        1060,
+        -420
       ],
       "parameters": {
-        "content": "### Write the draft\nRecording (upload or Google Drive link) → worker keeps only the voice → **ElevenLabs** (or Whisper) → transcript. Then prompt from **writer_settings** in Directus → OpenRouter → save both languages + social texts → status **review**. A pasted transcript skips the transcription.",
-        "width": 520,
-        "height": 140,
+        "content": "### 1 · Transcription\nSkipped when the post already has a transcript (unless you restart from here). The worker reads the transcript file, or downloads the recording / Drive link, keeps only the voice and sends it to the speech-to-text model (post's choice or Writer Settings).",
+        "width": 620,
+        "height": 150,
         "color": 5
       }
     },
     {
-      "id": "936e4c42-1946-42c7-84fa-c3b837138bad",
-      "name": "Mark as processing",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        520,
-        100
-      ],
-      "parameters": {
-        "method": "PATCH",
-        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
-            }
-          ]
-        },
-        "options": {},
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ status: \"processing\", error_message: null }) }}"
-      }
-    },
-    {
-      "id": "99f9dedf-1082-4936-b816-94b1c451c950",
-      "name": "Get the post",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        740,
-        100
-      ],
-      "parameters": {
-        "method": "GET",
-        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
-            }
-          ]
-        },
-        "options": {}
-      }
-    },
-    {
-      "id": "e4d63091-b980-4f89-b56f-6a0cc803f3e5",
-      "name": "Transcribe the recording?",
+      "id": "0c845dc5-541f-a8d1-4c99-e70271067da6",
+      "name": "Transcribe?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        1180,
-        100
+        1100,
+        -100
       ],
       "parameters": {
         "conditions": {
@@ -233,8 +238,8 @@
           },
           "conditions": [
             {
-              "id": "3840ab88-b039-4568-b0a8-0558c5789548",
-              "leftValue": "={{ !$('Get the post').item.json.data.transcript?.trim() && (!!$('Get the post').item.json.data.audio || !!$('Get the post').item.json.data.recording_url?.trim()) }}",
+              "id": "6a35d4ac-68fe-c87e-fed1-9e037d9d06c8",
+              "leftValue": "={{ $('Where to start').item.json.start === 'transcribe' && ($('Where to start').item.json.force || !$('Get the post').item.json.data.transcript?.trim()) }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
@@ -250,13 +255,40 @@
       }
     },
     {
-      "id": "4182a692-cdb5-4404-9150-dea9394e7435",
-      "name": "Transcribe the recording",
+      "id": "587ba4af-474e-0d3a-9687-73fba8ccc64e",
+      "name": "Report: transcription started",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1620,
-        -20
+        1320,
+        -220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WORKER_URL }}/stage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WORKER_SECRET }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ postId: $('Where to start').item.json.id, stage: \"transcribe\", state: \"start\", info: {} }) }}"
+      }
+    },
+    {
+      "id": "5af54528-ed41-5770-7a74-51b498e83ef7",
+      "name": "Transcribe (worker)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        -220
       ],
       "parameters": {
         "method": "POST",
@@ -271,26 +303,25 @@
           ]
         },
         "options": {
-          "timeout": 1800000
+          "timeout": 3600000
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ fileId: $('Get the post').item.json.data.audio || null, url: $('Get the post').item.json.data.audio ? null : ($('Get the post').item.json.data.recording_url || '').trim(), provider: $('Get writer settings').item.json.data.transcription_provider || \"elevenlabs\", language: $('Get writer settings').item.json.data.transcription_language || null, keyterms: [...($('Get writer settings').item.json.data.keyterms || []), ...($('Get the post').item.json.data.keyterms || [])] }) }}"
-      },
-      "onError": "continueErrorOutput"
+        "jsonBody": "={{ JSON.stringify({ postId: $('Where to start').item.json.id }) }}"
+      }
     },
     {
-      "id": "159470e8-a72b-4977-bbab-832c489d29aa",
+      "id": "b3f9d4f7-00ec-cfba-394d-ab9749713e0e",
       "name": "Save the transcript",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1840,
-        -20
+        1760,
+        -220
       ],
       "parameters": {
         "method": "PATCH",
-        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Where to start').item.json.id }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -303,18 +334,119 @@
         "options": {},
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ transcript: $json.text, status: \"processing\" }) }}"
-      },
-      "onError": "continueErrorOutput"
+        "jsonBody": "={{ JSON.stringify({ transcript: $('Transcribe (worker)').item.json.text, detected_language: $('Transcribe (worker)').item.json.language }) }}"
+      }
     },
     {
-      "id": "6d11418e-403a-4730-9823-e74eaf2722ed",
-      "name": "Get writer settings",
+      "id": "1a82cc44-be36-bfc0-55a7-35f238238d91",
+      "name": "Report: transcription done",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        960,
+        1980,
+        -220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WORKER_URL }}/stage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WORKER_SECRET }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ postId: $('Where to start').item.json.id, stage: \"transcribe\", state: \"done\", info: (({ model, language, chars, seconds }) => ({ model, language, chars, seconds }))($('Transcribe (worker)').item.json) }) }}"
+      }
+    },
+    {
+      "id": "adf3ef66-4c06-1286-03ca-b0d4ba416e80",
+      "name": "Note: write",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1060,
+        360
+      ],
+      "parameters": {
+        "content": "### 2 · Writing\nThe post is written in the meeting's language with the **Writing prompt** from Writer Settings. With status *revise*, the current draft and your Feedback are sent too.",
+        "width": 620,
+        "height": 130,
+        "color": 5
+      }
+    },
+    {
+      "id": "96a760e1-abd9-8a5d-c53e-6bcb9aef1cea",
+      "name": "Write?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
         100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "097d67c9-bedf-de1d-81f8-02082a9d5119",
+              "leftValue": "={{ ['transcribe', 'write'].includes($('Where to start').item.json.start) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "2fe2f232-2a77-dab9-7235-085a0047e6d4",
+      "name": "Get the post (writing)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Where to start').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "e89b2785-6ae2-4521-6906-7c627dc1f1fc",
+      "name": "Get writer settings (writing)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        0
       ],
       "parameters": {
         "method": "GET",
@@ -332,28 +464,54 @@
       }
     },
     {
-      "id": "fdcfa2ac-a4c1-4da7-83e9-20f499b7005b",
-      "name": "Build the AI request",
+      "id": "d419ccc6-ea90-30c0-06e1-c90a7e661c14",
+      "name": "Build the writing request",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2060,
-        100
+        2860,
+        0
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// Everything the AI needs: instructions from Directus + this meeting's material.\nconst settings = $('Get writer settings').item.json.data;\nconst post = $('Get the post').item.json.data;\nconst whisper = $('Save the transcript').isExecuted ? $('Save the transcript').item.json.data : null;\nconst transcript = (whisper?.transcript ?? post.transcript ?? '').trim();\nif (!transcript) throw new Error('No transcript. Upload a recording, paste a Google Drive link, or paste a transcript.');\n\nconst status = $('Read the event').item.json.status;\nconst revising = status === 'revise' && post.feedback?.trim() && post.body_fa;\n\nconst meeting = [\n  post.title ? `Working title: ${post.title}` : '',\n  post.meeting_number != null ? `Meeting number: ${post.meeting_number}` : '',\n  `Date: ${(post.date_created || new Date().toISOString()).slice(0, 10)}`,\n  post.notes ? `Notes from the hosts:\\n${post.notes}` : '',\n].filter(Boolean).join('\\n');\nconst material = [\n  `Social language: ${settings.social_language || 'en'}`,\n  `<meeting>\\n${meeting}\\n</meeting>`,\n  `<transcript>\\n${transcript}\\n</transcript>`,\n];\nif (revising) {\n  const current = {};\n  for (const k of ['slug','title_fa','description_fa','tags_fa','body_fa','title_en','description_en','tags_en','body_en','tweet','reddit_title','reddit_body']) current[k] = post[k];\n  material.push(`<current_draft>\\n${JSON.stringify(current, null, 2)}\\n</current_draft>`);\n  material.push(`<reviewer_feedback>\\n${post.feedback}\\n</reviewer_feedback>`);\n}\n\nconst str = { type: 'string' };\nconst list = { type: 'array', items: str };\nconst fields = { slug: str, title_fa: str, description_fa: str, tags_fa: list, body_fa: str, title_en: str, description_en: str, tags_en: list, body_en: str, tweet: str, reddit_title: str, reddit_body: str };\n\nreturn {\n  json: {\n    request: {\n      model: settings.model || 'deepseek/deepseek-v4-flash-0731',\n      max_tokens: 32000,\n      messages: [\n        { role: 'system', content: settings.system_prompt },\n        { role: 'user', content: material.join('\\n\\n') },\n      ],\n      response_format: {\n        type: 'json_schema',\n        json_schema: { name: 'blog_post', strict: true, schema: { type: 'object', properties: fields, required: Object.keys(fields), additionalProperties: false } },\n      },\n    },\n  },\n};"
-      },
-      "onError": "continueErrorOutput"
+        "jsCode": "const post = $('Get the post (writing)').item.json.data;\nconst s = $('Get writer settings (writing)').item.json.data;\nconst start = $('Where to start').item.json;\nconst detect = (t) => { const fa = (t.match(/[\\u0600-\\u06FF]/g) || []).length; const en = (t.match(/[A-Za-z]/g) || []).length; return fa > en * 0.5 ? 'fa' : 'en'; };\nconst NAMES = { fa: 'Persian (fa)', en: 'English (en)' };\nconst transcript = (post.transcript || '').trim();\nif (!transcript) throw new Error('There is no transcript to write from. Upload a recording or a transcript file, paste a Google Drive link or the transcript, then set the status to New.');\nconst lang = ['fa', 'en'].includes(post.source_language) ? post.source_language : (post.detected_language || detect(transcript));\nconst model = post.llm_model || s.model || 'deepseek/deepseek-v4-flash-0731';\nconst meeting = [\n  post.title ? `Working title: ${post.title}` : '',\n  post.meeting_number != null ? `Meeting number: ${post.meeting_number}` : '',\n  `Date: ${(post.date_created || new Date().toISOString()).slice(0, 10)}`,\n  post.notes ? `Notes from the hosts:\\n${post.notes}` : '',\n].filter(Boolean).join('\\n');\nconst material = [`Write the entry in: ${NAMES[lang]}`, `<meeting>\\n${meeting}\\n</meeting>`, `<transcript>\\n${transcript}\\n</transcript>`];\nif (start.status === 'revise' && post.feedback?.trim() && post['body_' + lang]) {\n  const current = { slug: post.slug, title: post['title_' + lang], description: post['description_' + lang], tags: post['tags_' + lang], body: post['body_' + lang] };\n  material.push(`<current_draft>\\n${JSON.stringify(current, null, 2)}\\n</current_draft>`, `<reviewer_feedback>\\n${post.feedback}\\n</reviewer_feedback>`);\n}\nconst str = { type: 'string' };\nconst fields = { slug: str, title: str, description: str, tags: { type: 'array', items: str }, body: str };\nreturn { json: { lang, model, request: {\n  model,\n  max_tokens: Number(s.max_output_tokens) || 64000,\n  reasoning: { effort: s.reasoning_effort || 'low' },\n  messages: [{ role: 'system', content: s.system_prompt }, { role: 'user', content: material.join('\\n\\n') }],\n  response_format: { type: 'json_schema', json_schema: { name: 'entry', strict: true, schema: { type: 'object', properties: fields, required: Object.keys(fields), additionalProperties: false } } },\n} } };"
+      }
     },
     {
-      "id": "a4035dcd-c210-490d-8dd5-1e4640c073b5",
-      "name": "Ask the AI (OpenRouter)",
+      "id": "fa771be8-c694-a34f-cd76-924b2af087eb",
+      "name": "Report: writing started",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2280,
-        100
+        3080,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WORKER_URL }}/stage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WORKER_SECRET }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ postId: $('Where to start').item.json.id, stage: \"write\", state: \"start\", info: { model: $('Build the writing request').item.json.model, lang: $('Build the writing request').item.json.lang } }) }}"
+      }
+    },
+    {
+      "id": "aeb2daad-4614-60f5-e92f-f49a92097148",
+      "name": "Ask the AI to write",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3300,
+        0
       ],
       "parameters": {
         "method": "POST",
@@ -376,37 +534,35 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json.request) }}"
-      },
-      "onError": "continueErrorOutput"
+        "jsonBody": "={{ JSON.stringify($('Build the writing request').item.json.request) }}"
+      }
     },
     {
-      "id": "91d4a2de-5aed-4a6c-bb03-2ef97ece45e6",
-      "name": "Check the AI answer",
+      "id": "39d90007-3288-655d-9b1b-bef176399455",
+      "name": "Check the draft",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2500,
-        100
+        3520,
+        0
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// Parse and sanity-check the JSON the model returned.\nconst choice = $json.choices?.[0];\nif (!choice) throw new Error('OpenRouter returned no answer: ' + JSON.stringify($json).slice(0, 500));\nif (choice.finish_reason === 'length') throw new Error('The answer was cut off (too long). Try again or shorten the transcript.');\nlet draft;\ntry { draft = JSON.parse(choice.message.content); }\ncatch { throw new Error('The AI answer was not valid JSON: ' + String(choice.message.content).slice(0, 300)); }\n\nfor (const k of ['title_fa', 'body_fa', 'title_en', 'body_en']) {\n  if (!draft[k]?.trim()) throw new Error(`The AI answer is missing ${k}`);\n}\n\nconst post = $('Get the post').item.json.data;\nconst slugify = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);\nconst tags = (t) => [...new Set((t || []).map((x) => String(x).trim().replace(/^#/, '')).filter(Boolean))].slice(0, 6);\n\nreturn {\n  json: {\n    // keep the URL stable once a post has been published\n    slug: post.published_at && post.slug ? post.slug : slugify(draft.slug) || `meeting-${post.id}`,\n    title_fa: draft.title_fa.trim(),\n    description_fa: draft.description_fa.trim(),\n    tags_fa: tags(draft.tags_fa),\n    body_fa: draft.body_fa.trim() + '\\n',\n    title_en: draft.title_en.trim(),\n    description_en: draft.description_en.trim(),\n    tags_en: tags(draft.tags_en),\n    body_en: draft.body_en.trim() + '\\n',\n    tweet: draft.tweet.trim(),\n    reddit_title: draft.reddit_title.trim().slice(0, 300),\n    reddit_body: draft.reddit_body.trim(),\n    feedback: null,\n    error_message: null,\n    status: 'review',\n  },\n};"
-      },
-      "onError": "continueErrorOutput"
+        "jsCode": "const req = $('Build the writing request').item.json;\nconst choice = $json.choices?.[0];\nif (!choice) throw new Error(`The AI model ${req.model} returned no answer. Full response: ${JSON.stringify($json)}`);\nif (choice.finish_reason === 'length') {\n  throw new Error(\n    `The AI model ${req.model} ran out of output space while writing ` +\n    `(used ${$json.usage?.completion_tokens ?? '?'} of max ${req.request.max_tokens} tokens, thinking included). ` +\n    `Fix: pick a model with a larger output limit for this post (\"AI model (this post)\" or 🤖 Change model in Telegram), ` +\n    `set \"Reasoning effort\" to Low, or raise \"Max output tokens\" in Writer Settings. Then Retry.`);\n}\nlet out;\ntry { out = JSON.parse(choice.message.content); }\ncatch (e) { throw new Error(`The AI model ${req.model} did not return valid JSON (${e.message}). Answer was: ${String(choice.message.content)}`); }\nfor (const k of ['title', 'body']) if (!String(out[k] || '').trim()) throw new Error(`The AI model ${req.model} left \"${k}\" empty. Answer was: ${choice.message.content}`);\nconst tags = (t) => [...new Set((t || []).map((x) => String(x).trim().replace(/^#/, '')).filter(Boolean))].slice(0, 6);\n\nconst post = $('Get the post (writing)').item.json.data;\nconst lang = req.lang;\nconst slugify = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);\nreturn { json: { fields: {\n  slug: post.published_at && post.slug ? post.slug : slugify(out.slug) || `post-${post.id}`,\n  ['title_' + lang]: out.title.trim(),\n  ['description_' + lang]: String(out.description || '').trim(),\n  ['tags_' + lang]: tags(out.tags),\n  ['body_' + lang]: out.body.trim() + '\\n',\n  detected_language: lang,\n  feedback: null,\n}, chars: out.body.length } };"
+      }
     },
     {
-      "id": "c7f23d25-9229-475d-b68e-4894c26d43cb",
+      "id": "75911a03-39a5-3f2c-7508-ab9cf5bbb899",
       "name": "Is the slug taken?",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2720,
-        100
+        3740,
+        0
       ],
       "parameters": {
         "method": "GET",
-        "url": "={{ $env.DIRECTUS_URL }}/items/posts?filter[slug][_eq]={{ encodeURIComponent($json.slug) }}&filter[id][_neq]={{ $('Read the event').item.json.id }}&fields=id&limit=1",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts?filter[slug][_eq]={{ encodeURIComponent($json.fields.slug) }}&filter[id][_neq]={{ $('Where to start').item.json.id }}&fields=id&limit=1",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -420,31 +576,31 @@
       }
     },
     {
-      "id": "1cab8f45-3a94-4098-9fbd-d51fd9bbfeb0",
+      "id": "ea59da8d-a38e-c015-4628-2e04759a262f",
       "name": "Use a free slug",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2940,
-        100
+        3960,
+        0
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// Another post already uses this slug → add this post's number to keep URLs unique.\nconst draft = { ...$('Check the AI answer').item.json };\nif ($json.data?.length) draft.slug = `${draft.slug}-${$('Read the event').item.json.id}`;\nreturn { json: draft };"
+        "jsCode": "// Another post already uses this slug → add this post's number to keep URLs unique.\nconst fields = { ...$('Check the draft').item.json.fields };\nif ($json.data?.length) fields.slug = `${fields.slug}-${$('Where to start').item.json.id}`;\nreturn { json: fields };"
       }
     },
     {
-      "id": "30fd2d78-8b7f-4c5d-9069-f9e84d8a96c3",
+      "id": "a58287d4-bd75-28e8-2e5d-75696ed25002",
       "name": "Save the draft",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        3160,
-        100
+        4180,
+        0
       ],
       "parameters": {
         "method": "PATCH",
-        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Where to start').item.json.id }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -458,161 +614,20 @@
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json) }}"
-      },
-      "onError": "continueErrorOutput"
-    },
-    {
-      "id": "b3ea1ee1-537b-4b51-9a1f-a9bc72f33e76",
-      "name": "Telegram set up?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [
-        3380,
-        100
-      ],
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "loose",
-            "version": 2
-          },
-          "conditions": [
-            {
-              "id": "915bc937-9b41-4701-a608-0f177e78d7b3",
-              "leftValue": "={{ !!$env.TELEGRAM_BOT_TOKEN && !!$env.TELEGRAM_CHAT_ID }}",
-              "rightValue": "",
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "looseTypeValidation": true,
-        "options": {}
       }
     },
     {
-      "id": "f478069c-5b96-43c5-8974-872906190451",
-      "name": "Tell us on Telegram",
+      "id": "d8afbf63-979f-5aab-01af-026549bd7dbd",
+      "name": "Report: writing done",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        3600,
-        100
+        4400,
+        0
       ],
       "parameters": {
         "method": "POST",
-        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": []
-        },
-        "options": {},
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID, text: \"📝 Draft ready for review: \" + $('Check the AI answer').item.json.title_fa + \"\\n\" + $env.DIRECTUS_PUBLIC_URL + \"/admin/content/posts/\" + $('Read the event').item.json.id }) }}"
-      },
-      "onError": "continueRegularOutput"
-    },
-    {
-      "id": "ea565d76-b491-4b6d-a8e0-bee7e171b605",
-      "name": "Note 19",
-      "type": "n8n-nodes-base.stickyNote",
-      "typeVersion": 1,
-      "position": [
-        480,
-        320
-      ],
-      "parameters": {
-        "content": "### Publish\nRebuild the static site (the worker pulls published posts from Directus), then post on X and Reddit once — a saved link means it was already posted.",
-        "width": 420,
-        "height": 140,
-        "color": 6
-      }
-    },
-    {
-      "id": "ab2a7179-7ef5-4598-95d0-13d7f4bfba8c",
-      "name": "Get the post to publish",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        520,
-        520
-      ],
-      "parameters": {
-        "method": "GET",
-        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
-            }
-          ]
-        },
-        "options": {}
-      }
-    },
-    {
-      "id": "a4a9f99c-a3fa-40b2-943d-527860e5efb0",
-      "name": "Ready to publish?",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        740,
-        520
-      ],
-      "parameters": {
-        "mode": "runOnceForEachItem",
-        "jsCode": "// Refuse to publish a post that has no text yet (e.g. approved before the AI finished).\nconst post = $json.data;\nif (!post.slug) throw new Error('This post has no slug yet. Wait for the AI draft, or fill in the slug.');\nconst langs = ['fa', 'en'].filter((l) => post['title_' + l]?.trim() && post['body_' + l]?.trim());\nif (!langs.length) throw new Error('This post has no title and text in either language yet.');\nreturn { json: post };"
-      },
-      "onError": "continueErrorOutput"
-    },
-    {
-      "id": "2636fbde-f4bf-41aa-96e3-2ae014f4a3cb",
-      "name": "Mark as publishing",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        960,
-        520
-      ],
-      "parameters": {
-        "method": "PATCH",
-        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
-            }
-          ]
-        },
-        "options": {},
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ status: \"publishing\", error_message: null, published_at: $json.published_at || $now.toISO() }) }}"
-      }
-    },
-    {
-      "id": "b569cfc4-aaa7-41d0-8dea-e984d7992b55",
-      "name": "Rebuild the site",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        1180,
-        520
-      ],
-      "parameters": {
-        "method": "POST",
-        "url": "={{ $env.WORKER_URL }}/build",
+        "url": "={{ $env.WORKER_URL }}/stage",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -622,20 +637,60 @@
             }
           ]
         },
-        "options": {
-          "timeout": 600000
-        }
-      },
-      "onError": "continueErrorOutput"
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ postId: $('Where to start').item.json.id, stage: \"write\", state: \"done\", info: { model: $('Build the writing request').item.json.model, lang: $('Build the writing request').item.json.lang, chars: $('Check the draft').item.json.chars } }) }}"
+      }
     },
     {
-      "id": "0f301003-b4bd-48a8-a6e5-241bd9e88ae8",
-      "name": "Get social settings",
+      "id": "6340dc94-87eb-bdcd-eac7-b7beae832c4d",
+      "name": "Note: translate",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        3080,
+        360
+      ],
+      "parameters": {
+        "content": "### 3 · Translation\nThe finished draft is translated into the other language with the **Translation prompt**, which also writes the X / Reddit texts. Status → *review*; the drafts go to Telegram.",
+        "width": 620,
+        "height": 130,
+        "color": 5
+      }
+    },
+    {
+      "id": "2af6162d-e8ef-6801-c1e8-927b5989c612",
+      "name": "Get the post (translation)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1400,
-        520
+        4620,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Where to start').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d6670146-b3ce-b18b-f5c2-87cb38513973",
+      "name": "Get writer settings (translation)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4840,
+        200
       ],
       "parameters": {
         "method": "GET",
@@ -653,167 +708,105 @@
       }
     },
     {
-      "id": "f89c55bb-d8ab-4022-a34e-b72963f69b6d",
-      "name": "Prepare social posts",
+      "id": "76f5c8e8-d335-503b-d7f3-a2af00f62a1c",
+      "name": "Build the translation request",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1620,
-        520
+        5060,
+        200
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const post = $('Get the post to publish').item.json.data;\nconst s = $json.data;\nconst lang = s.social_language || 'en';\nconst url = `${$env.SITE_URL}/${lang}/blog/${post.slug}/`;\nconst xMax = 280 - 23 - 2; // links always count as 23 characters on X\nconst tweet = (post.tweet || post['title_' + lang] || '').trim();\nreturn {\n  json: {\n    url,\n    tweetText: (tweet.length > xMax ? tweet.slice(0, xMax - 1) + '…' : tweet) + '\\n\\n' + url,\n    toX: post.share_x === true && !post.x_url && $env.X_ENABLED === 'true',\n    toReddit: post.share_reddit === true && !post.reddit_url && !!s.reddit_subreddit && $env.REDDIT_ENABLED === 'true',\n    subreddit: (s.reddit_subreddit || '').replace(/^\\/?r\\//, ''),\n    redditKind: s.reddit_kind || 'link',\n    redditTitle: post.reddit_title || post['title_' + lang],\n    redditText: (post.reddit_body || '') + '\\n\\n' + url,\n  },\n};"
+        "jsCode": "const post = $('Get the post (translation)').item.json.data;\nconst s = $('Get writer settings (translation)').item.json.data;\nconst NAMES = { fa: 'Persian (fa)', en: 'English (en)' };\nconst from = ['fa', 'en'].includes(post.source_language) ? post.source_language : (post.detected_language || (post.body_fa ? 'fa' : 'en'));\nconst to = from === 'fa' ? 'en' : 'fa';\nif (!post['body_' + from]?.trim()) throw new Error(`There is no ${NAMES[from]} draft to translate yet. Set \"Restart from\" to Writing and the status to Retry.`);\nconst model = post.llm_model || s.model || 'deepseek/deepseek-v4-flash-0731';\nconst source = { title: post['title_' + from], description: post['description_' + from], tags: post['tags_' + from] || [], body: post['body_' + from] };\nconst str = { type: 'string' };\nconst fields = { title: str, description: str, tags: { type: 'array', items: str }, body: str, tweet: str, reddit_title: str, reddit_body: str };\nconst user = [\n  `Translate from ${NAMES[from]} into: ${NAMES[to]}`,\n  `Social language: ${NAMES[s.social_language || 'en']}`,\n  `<entry>\\n${JSON.stringify(source, null, 2)}\\n</entry>`,\n].join('\\n\\n');\nreturn { json: { from, to, model, request: {\n  model,\n  max_tokens: Number(s.max_output_tokens) || 64000,\n  reasoning: { effort: s.reasoning_effort || 'low' },\n  messages: [{ role: 'system', content: s.translation_prompt }, { role: 'user', content: user }],\n  response_format: { type: 'json_schema', json_schema: { name: 'translation', strict: true, schema: { type: 'object', properties: fields, required: Object.keys(fields), additionalProperties: false } } },\n} } };"
       }
     },
     {
-      "id": "5c09cad6-f4d6-4117-ac07-447f5289bebe",
-      "name": "Post on X?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
+      "id": "3f2ddb9b-0243-5ccb-de97-8a691a686452",
+      "name": "Report: translation started",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
-        1840,
-        520
+        5280,
+        200
       ],
       "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "loose",
-            "version": 2
-          },
-          "conditions": [
+        "method": "POST",
+        "url": "={{ $env.WORKER_URL }}/stage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
             {
-              "id": "3104b6f3-3593-4f68-b4b0-c30294fcea53",
-              "leftValue": "={{ $json.toX }}",
-              "rightValue": "",
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
-              }
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WORKER_SECRET }}"
             }
-          ],
-          "combinator": "and"
+          ]
         },
-        "looseTypeValidation": true,
-        "options": {}
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ postId: $('Where to start').item.json.id, stage: \"translate\", state: \"start\", info: { model: $('Build the translation request').item.json.model, from: $('Build the translation request').item.json.from, to: $('Build the translation request').item.json.to } }) }}"
       }
     },
     {
-      "id": "5fae72d4-bf91-4fd1-954f-f070104aa0d3",
-      "name": "Post on X",
-      "type": "n8n-nodes-base.twitter",
+      "id": "08456c42-747b-2b3d-dcd4-98607575d7ca",
+      "name": "Ask the AI to translate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5500,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OPENROUTER_BASE_URL || \"https://openrouter.ai/api/v1\" }}/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.OPENROUTER_API_KEY }}"
+            },
+            {
+              "name": "X-Title",
+              "value": "Our Takeaway"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 900000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Build the translation request').item.json.request) }}"
+      }
+    },
+    {
+      "id": "c51aa69f-1eb7-e303-99fe-bb2b0c9486f4",
+      "name": "Check the translation",
+      "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2060,
-        420
+        5720,
+        200
       ],
       "parameters": {
-        "text": "={{ $('Prepare social posts').item.json.tweetText }}",
-        "additionalFields": {}
-      },
-      "onError": "continueRegularOutput",
-      "credentials": {}
-    },
-    {
-      "id": "fcadb128-f5c5-4792-b43f-714fc8689d66",
-      "name": "Save the X link",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        2280,
-        420
-      ],
-      "parameters": {
-        "method": "PATCH",
-        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
-            }
-          ]
-        },
-        "options": {},
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json.error ? { error_message: \"X: \" + ($json.error.message || $json.error) } : { x_url: \"https://x.com/i/web/status/\" + ($json.id ?? $json.data?.id) }) }}"
-      },
-      "onError": "continueRegularOutput"
-    },
-    {
-      "id": "0a493527-6b31-44d3-9689-e4ec8fc8f0dd",
-      "name": "Post on Reddit?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [
-        2500,
-        520
-      ],
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "loose",
-            "version": 2
-          },
-          "conditions": [
-            {
-              "id": "070a71ec-fc93-4aac-8c7d-a324f9c06fb8",
-              "leftValue": "={{ $('Prepare social posts').item.json.toReddit }}",
-              "rightValue": "",
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "looseTypeValidation": true,
-        "options": {}
+        "mode": "runOnceForEachItem",
+        "jsCode": "const req = $('Build the translation request').item.json;\nconst choice = $json.choices?.[0];\nif (!choice) throw new Error(`The AI model ${req.model} returned no answer. Full response: ${JSON.stringify($json)}`);\nif (choice.finish_reason === 'length') {\n  throw new Error(\n    `The AI model ${req.model} ran out of output space while translating ` +\n    `(used ${$json.usage?.completion_tokens ?? '?'} of max ${req.request.max_tokens} tokens, thinking included). ` +\n    `Fix: pick a model with a larger output limit for this post (\"AI model (this post)\" or 🤖 Change model in Telegram), ` +\n    `set \"Reasoning effort\" to Low, or raise \"Max output tokens\" in Writer Settings. Then Retry.`);\n}\nlet out;\ntry { out = JSON.parse(choice.message.content); }\ncatch (e) { throw new Error(`The AI model ${req.model} did not return valid JSON (${e.message}). Answer was: ${String(choice.message.content)}`); }\nfor (const k of ['title', 'body']) if (!String(out[k] || '').trim()) throw new Error(`The AI model ${req.model} left \"${k}\" empty. Answer was: ${choice.message.content}`);\nconst tags = (t) => [...new Set((t || []).map((x) => String(x).trim().replace(/^#/, '')).filter(Boolean))].slice(0, 6);\n\nconst to = req.to;\nreturn { json: {\n  ['title_' + to]: out.title.trim(),\n  ['description_' + to]: String(out.description || '').trim(),\n  ['tags_' + to]: tags(out.tags),\n  ['body_' + to]: out.body.trim() + '\\n',\n  tweet: String(out.tweet || '').trim(),\n  reddit_title: String(out.reddit_title || '').trim().slice(0, 300),\n  reddit_body: String(out.reddit_body || '').trim(),\n} };"
       }
     },
     {
-      "id": "527358a8-4bca-482c-8bad-d6c5239ada9e",
-      "name": "Post on Reddit",
-      "type": "n8n-nodes-base.reddit",
-      "typeVersion": 1,
-      "position": [
-        2720,
-        420
-      ],
-      "parameters": {
-        "resource": "post",
-        "operation": "create",
-        "subreddit": "={{ $('Prepare social posts').item.json.subreddit }}",
-        "kind": "={{ $('Prepare social posts').item.json.redditKind }}",
-        "title": "={{ $('Prepare social posts').item.json.redditTitle }}",
-        "url": "={{ $('Prepare social posts').item.json.url }}",
-        "text": "={{ $('Prepare social posts').item.json.redditText }}",
-        "resubmit": true
-      },
-      "onError": "continueRegularOutput",
-      "credentials": {}
-    },
-    {
-      "id": "24974f65-63fb-4567-8faf-98c3f6b7ae65",
-      "name": "Save the Reddit link",
+      "id": "754aa033-73b1-ea94-aef5-792d34d8d300",
+      "name": "Save the translation",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2940,
-        420
+        5940,
+        200
       ],
       "parameters": {
         "method": "PATCH",
-        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Where to start').item.json.id }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -826,60 +819,151 @@
         "options": {},
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json.error ? { error_message: \"Reddit: \" + ($json.error.message || $json.error) } : { reddit_url: $json.url }) }}"
-      },
-      "onError": "continueRegularOutput"
-    },
-    {
-      "id": "3eccd891-3cb3-4c7e-a2b6-ad1dcb9d6bf8",
-      "name": "Mark as published",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        3160,
-        520
-      ],
-      "parameters": {
-        "method": "PATCH",
-        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
-            }
-          ]
-        },
-        "options": {},
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ status: \"published\" }) }}"
+        "jsonBody": "={{ JSON.stringify($json) }}"
       }
     },
     {
-      "id": "583e3a40-c372-4302-b441-b07f0c121d5e",
-      "name": "Note 33",
+      "id": "4b548061-d698-fb81-726d-015c484e5a29",
+      "name": "Report: translation done (→ review)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6160,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WORKER_URL }}/stage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WORKER_SECRET }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ postId: $('Where to start').item.json.id, stage: \"translate\", state: \"done\", info: { model: $('Build the translation request').item.json.model, from: $('Build the translation request').item.json.from, to: $('Build the translation request').item.json.to } }) }}"
+      }
+    },
+    {
+      "id": "d468ecbb-b859-8275-8dc3-949f813f7f9c",
+      "name": "Note: publish",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        480,
-        720
+        1060,
+        700
       ],
       "parameters": {
-        "content": "### Remove from site\nThe post is no longer \"published\", so a rebuild drops it. Posts already on X/Reddit stay there.",
-        "width": 420,
-        "height": 120,
-        "color": 3
+        "content": "### Publish\nRebuild the static site (the worker pulls published posts from Directus), then post on X and Reddit once — a saved link means it was already posted. A failed X / Reddit post is reported but does not undo the publish.",
+        "width": 620,
+        "height": 140,
+        "color": 6
       }
     },
     {
-      "id": "0d6488f8-df55-44f9-a8e2-2f618eb5fe0f",
-      "name": "Rebuild without the post",
+      "id": "083e8efa-5094-d921-fe1d-9da4ccaf3287",
+      "name": "Report: publishing started",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        520,
+        1100,
+        900
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WORKER_URL }}/stage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WORKER_SECRET }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ postId: $('Where to start').item.json.id, stage: \"publish\", state: \"start\", info: {} }) }}"
+      }
+    },
+    {
+      "id": "fee44ddd-1827-80b6-c487-a290d0e04356",
+      "name": "Get the post to publish",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        900
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Where to start').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "bd6ab030-3b24-349d-123e-5ecf676851a9",
+      "name": "Ready to publish?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        900
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const post = $json.data;\nif (!post.slug) throw new Error('This post has no slug yet. Let the AI finish the draft, or fill in the slug, then set the status to Approved again.');\nconst langs = ['fa', 'en'].filter((l) => post['title_' + l]?.trim() && post['body_' + l]?.trim());\nif (!langs.length) throw new Error('This post has no title and text in either language yet.');\nreturn { json: { published_at: post.published_at || new Date().toISOString(), langs } };"
+      }
+    },
+    {
+      "id": "293079b1-5108-25c3-61a0-02e7c6042106",
+      "name": "Set the publish date",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        900
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Where to start').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ published_at: $json.published_at }) }}"
+      }
+    },
+    {
+      "id": "3bae017f-bb75-ac23-fd27-beb3f6cbaa2c",
+      "name": "Rebuild the site",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
         900
       ],
       "parameters": {
@@ -897,37 +981,20 @@
         "options": {
           "timeout": 600000
         }
-      },
-      "onError": "continueErrorOutput"
-    },
-    {
-      "id": "409a82fc-9c29-4b61-811e-dd2aea7dd446",
-      "name": "Note 35",
-      "type": "n8n-nodes-base.stickyNote",
-      "typeVersion": 1,
-      "position": [
-        1180,
-        760
-      ],
-      "parameters": {
-        "content": "### Errors\nAny failing step lands here: the post gets status **error** and the message, visible in Directus. Fix the cause and set the status again to retry.",
-        "width": 420,
-        "height": 130,
-        "color": 2
       }
     },
     {
-      "id": "211f472d-c94f-46c8-ac2a-89e5339933fc",
-      "name": "Mark as error",
+      "id": "a7d25bf2-8456-4bc6-bdc6-a323ec723b0c",
+      "name": "Get social settings",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1400,
+        2200,
         900
       ],
       "parameters": {
-        "method": "PATCH",
-        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
+        "method": "GET",
+        "url": "={{ $env.DIRECTUS_URL }}/items/writer_settings",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -937,24 +1004,86 @@
             }
           ]
         },
-        "options": {},
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ status: \"error\", error_message: (m => (m.match(/message\\\\?\"\\s*:\\s*\\\\?\"(.+?)\\\\?\"/) || m.match(/error\\\\?\"\\s*:\\s*\\\\?\"(.+?)\\\\?\"\\s*\\}/) || [])[1] || m)(String($json.error?.message || $json.error || \"Unknown error\").replace(/ \\[line \\d+\\]$/, \"\")).slice(0, 2000) }) }}"
+        "options": {}
       }
     },
     {
-      "id": "7abe3aa8-7ce4-49a7-87a8-3f47a56c5a7e",
-      "name": "Mark as transcribing",
+      "id": "cea3bfe9-eb3e-d8bc-f656-d051027a6aa7",
+      "name": "Prepare social posts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        900
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const post = $('Get the post to publish').item.json.data;\nconst s = $json.data;\nconst langs = $('Ready to publish?').item.json.langs;\nconst lang = langs.includes(s.social_language || 'en') ? (s.social_language || 'en') : langs[0];\nconst url = `${$env.SITE_URL}/${lang}/blog/${post.slug}/`;\nconst xMax = 280 - 23 - 2; // links always count as 23 characters on X\nconst tweet = (post.tweet || post['title_' + lang] || '').trim();\nreturn { json: {\n  url,\n  tweetText: (tweet.length > xMax ? tweet.slice(0, xMax - 1) + '…' : tweet) + '\\n\\n' + url,\n  toX: post.share_x === true && !post.x_url && $env.X_ENABLED === 'true',\n  toReddit: post.share_reddit === true && !post.reddit_url && !!s.reddit_subreddit && $env.REDDIT_ENABLED === 'true',\n  subreddit: (s.reddit_subreddit || '').replace(/^\\/?r\\//, ''),\n  redditKind: s.reddit_kind || 'link',\n  redditTitle: post.reddit_title || post['title_' + lang],\n  redditText: (post.reddit_body || '') + '\\n\\n' + url,\n} };"
+      }
+    },
+    {
+      "id": "b9ca8138-5be2-d4ec-69d5-8a0cb2b95a17",
+      "name": "Post on X?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        900
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c6b914a2-51ae-9796-7da6-3085dc8c2370",
+              "leftValue": "={{ $json.toX }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "df7c19f4-9948-a7a7-2ef7-751d177a91aa",
+      "name": "Post on X",
+      "type": "n8n-nodes-base.twitter",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        800
+      ],
+      "parameters": {
+        "text": "={{ $('Prepare social posts').item.json.tweetText }}",
+        "additionalFields": {}
+      },
+      "onError": "continueRegularOutput",
+      "credentials": {}
+    },
+    {
+      "id": "735a518f-2c43-3342-ed7b-5415d000cf9c",
+      "name": "Save the X link",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1400,
-        -20
+        3080,
+        800
       ],
       "parameters": {
         "method": "PATCH",
-        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Read the event').item.json.id }}",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Where to start').item.json.id }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -967,7 +1096,228 @@
         "options": {},
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ status: \"transcribing\" }) }}"
+        "jsonBody": "={{ JSON.stringify($json.error ? {} : { x_url: \"https://x.com/i/web/status/\" + ($json.id ?? $json.data?.id) }) }}"
+      }
+    },
+    {
+      "id": "dc8310e6-6c6a-2205-1c46-5e5646f46ba0",
+      "name": "Post on Reddit?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3300,
+        900
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a60662ba-0857-1975-e751-1cd20fd5a02b",
+              "leftValue": "={{ $('Prepare social posts').item.json.toReddit }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "42d936fa-34e6-10ab-09ce-b3ab391a8aeb",
+      "name": "Post on Reddit",
+      "type": "n8n-nodes-base.reddit",
+      "typeVersion": 1,
+      "position": [
+        3520,
+        800
+      ],
+      "parameters": {
+        "resource": "post",
+        "operation": "create",
+        "subreddit": "={{ $('Prepare social posts').item.json.subreddit }}",
+        "kind": "={{ $('Prepare social posts').item.json.redditKind }}",
+        "title": "={{ $('Prepare social posts').item.json.redditTitle }}",
+        "url": "={{ $('Prepare social posts').item.json.url }}",
+        "text": "={{ $('Prepare social posts').item.json.redditText }}",
+        "resubmit": true
+      },
+      "onError": "continueRegularOutput",
+      "credentials": {}
+    },
+    {
+      "id": "4bc3430c-3cc8-46e1-c45f-fc86a1f7203c",
+      "name": "Save the Reddit link",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3740,
+        800
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Where to start').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.error ? {} : { reddit_url: $json.url }) }}"
+      }
+    },
+    {
+      "id": "e4e7b81e-7fdb-abd5-34a2-3e031ace28a5",
+      "name": "Sum up the social posts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3960,
+        900
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const prep = $('Prepare social posts').item.json;\nconst result = (node, label) => {\n  if (!$(node).isExecuted) return null;\n  const r = $(node).item.json;\n  if (r.error) return `${label}: FAILED — ${r.error.message || JSON.stringify(r.error)}${r.error.description ? ' (' + r.error.description + ')' : ''}`;\n  return `${label}: posted`;\n};\nreturn { json: { url: prep.url, x: result('Post on X', 'X'), reddit: result('Post on Reddit', 'Reddit') } };"
+      }
+    },
+    {
+      "id": "e340bcba-2473-283a-eec6-8f2464ae44a4",
+      "name": "Report: published",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4180,
+        900
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WORKER_URL }}/stage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WORKER_SECRET }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ postId: $('Where to start').item.json.id, stage: \"publish\", state: \"done\", info: { url: $json.url, x: $json.x, reddit: $json.reddit, note: [$json.x, $json.reddit].filter(Boolean).join(\" · \") || undefined } }) }}"
+      }
+    },
+    {
+      "id": "6f4c9a64-a0da-cf2b-6708-107b17c7231a",
+      "name": "Note: remove",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1060,
+        1080
+      ],
+      "parameters": {
+        "content": "### Remove from site\nThe post is no longer \"published\", so a rebuild drops it. Posts already on X / Reddit stay there.",
+        "width": 620,
+        "height": 110,
+        "color": 3
+      }
+    },
+    {
+      "id": "df147d22-be3d-b9e1-6e7f-5fe38807d00a",
+      "name": "Report: removing started",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        1240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WORKER_URL }}/stage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WORKER_SECRET }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ postId: $('Where to start').item.json.id, stage: \"remove\", state: \"start\", info: {} }) }}"
+      }
+    },
+    {
+      "id": "c52560ce-820b-04fa-58c7-a5eb27482995",
+      "name": "Rebuild without the post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        1240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WORKER_URL }}/build",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WORKER_SECRET }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 600000
+        }
+      }
+    },
+    {
+      "id": "cc52de09-b4b2-b531-b8cc-f299e90da031",
+      "name": "Report: removed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        1240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WORKER_URL }}/stage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WORKER_SECRET }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ postId: $('Where to start').item.json.id, stage: \"remove\", state: \"done\", info: {} }) }}"
       }
     }
   ],
@@ -976,50 +1326,14 @@
       "main": [
         [
           {
-            "node": "Read the event",
+            "node": "Decide what to run",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Read the event": {
-      "main": [
-        [
-          {
-            "node": "Route by status",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Route by status": {
-      "main": [
-        [
-          {
-            "node": "Mark as processing",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Get the post to publish",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Rebuild without the post",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Mark as processing": {
+    "Decide what to run": {
       "main": [
         [
           {
@@ -1034,7 +1348,94 @@
       "main": [
         [
           {
-            "node": "Get writer settings",
+            "node": "Where to start",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Where to start": {
+      "main": [
+        [
+          {
+            "node": "Claim this run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim this run": {
+      "main": [
+        [
+          {
+            "node": "Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route": {
+      "main": [
+        [
+          {
+            "node": "Transcribe?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Report: publishing started",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Report: removing started",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcribe?": {
+      "main": [
+        [
+          {
+            "node": "Report: transcription started",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Write?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report: transcription started": {
+      "main": [
+        [
+          {
+            "node": "Transcribe (worker)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcribe (worker)": {
+      "main": [
+        [
+          {
+            "node": "Save the transcript",
             "type": "main",
             "index": 0
           }
@@ -1045,79 +1446,102 @@
       "main": [
         [
           {
-            "node": "Build the AI request",
+            "node": "Report: transcription done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report: transcription done": {
+      "main": [
+        [
+          {
+            "node": "Write?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write?": {
+      "main": [
+        [
+          {
+            "node": "Get the post (writing)",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Mark as error",
+            "node": "Get the post (translation)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Get writer settings": {
+    "Get the post (writing)": {
       "main": [
         [
           {
-            "node": "Transcribe the recording?",
+            "node": "Get writer settings (writing)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Build the AI request": {
+    "Get writer settings (writing)": {
       "main": [
         [
           {
-            "node": "Ask the AI (OpenRouter)",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Mark as error",
+            "node": "Build the writing request",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Ask the AI (OpenRouter)": {
+    "Build the writing request": {
       "main": [
         [
           {
-            "node": "Check the AI answer",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Mark as error",
+            "node": "Report: writing started",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Check the AI answer": {
+    "Report: writing started": {
+      "main": [
+        [
+          {
+            "node": "Ask the AI to write",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask the AI to write": {
+      "main": [
+        [
+          {
+            "node": "Check the draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check the draft": {
       "main": [
         [
           {
             "node": "Is the slug taken?",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Mark as error",
             "type": "main",
             "index": 0
           }
@@ -1150,25 +1574,106 @@
       "main": [
         [
           {
-            "node": "Telegram set up?",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Mark as error",
+            "node": "Report: writing done",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Telegram set up?": {
+    "Report: writing done": {
       "main": [
         [
           {
-            "node": "Tell us on Telegram",
+            "node": "Get the post (translation)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get the post (translation)": {
+      "main": [
+        [
+          {
+            "node": "Get writer settings (translation)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get writer settings (translation)": {
+      "main": [
+        [
+          {
+            "node": "Build the translation request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build the translation request": {
+      "main": [
+        [
+          {
+            "node": "Report: translation started",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report: translation started": {
+      "main": [
+        [
+          {
+            "node": "Ask the AI to translate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask the AI to translate": {
+      "main": [
+        [
+          {
+            "node": "Check the translation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check the translation": {
+      "main": [
+        [
+          {
+            "node": "Save the translation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save the translation": {
+      "main": [
+        [
+          {
+            "node": "Report: translation done (→ review)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report: publishing started": {
+      "main": [
+        [
+          {
+            "node": "Get the post to publish",
             "type": "main",
             "index": 0
           }
@@ -1190,21 +1695,14 @@
       "main": [
         [
           {
-            "node": "Mark as publishing",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Mark as error",
+            "node": "Set the publish date",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Mark as publishing": {
+    "Set the publish date": {
       "main": [
         [
           {
@@ -1220,13 +1718,6 @@
         [
           {
             "node": "Get social settings",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Mark as error",
             "type": "main",
             "index": 0
           }
@@ -1306,7 +1797,7 @@
         ],
         [
           {
-            "node": "Mark as published",
+            "node": "Sum up the social posts",
             "type": "main",
             "index": 0
           }
@@ -1328,7 +1819,29 @@
       "main": [
         [
           {
-            "node": "Mark as published",
+            "node": "Sum up the social posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sum up the social posts": {
+      "main": [
+        [
+          {
+            "node": "Report: published",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report: removing started": {
+      "main": [
+        [
+          {
+            "node": "Rebuild without the post",
             "type": "main",
             "index": 0
           }
@@ -1337,57 +1850,9 @@
     },
     "Rebuild without the post": {
       "main": [
-        [],
         [
           {
-            "node": "Mark as error",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Transcribe the recording?": {
-      "main": [
-        [
-          {
-            "node": "Mark as transcribing",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Build the AI request",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Transcribe the recording": {
-      "main": [
-        [
-          {
-            "node": "Save the transcript",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Mark as error",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Mark as transcribing": {
-      "main": [
-        [
-          {
-            "node": "Transcribe the recording",
+            "node": "Report: removed",
             "type": "main",
             "index": 0
           }
@@ -1399,7 +1864,8 @@
   "settings": {
     "executionOrder": "v1",
     "saveDataErrorExecution": "all",
-    "saveDataSuccessExecution": "all"
+    "saveDataSuccessExecution": "all",
+    "errorWorkflow": "PipelineErrors01"
   },
   "pinData": {},
   "meta": {

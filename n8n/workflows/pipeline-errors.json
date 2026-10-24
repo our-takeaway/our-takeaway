@@ -1,0 +1,143 @@
+{
+  "id": "PipelineErrors01",
+  "name": "Pipeline errors",
+  "nodes": [
+    {
+      "id": "eab03eba-79a2-085b-f8f5-95ba2d6f2205",
+      "name": "Note: about",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -280
+      ],
+      "parameters": {
+        "content": "## Pipeline errors\nn8n runs this whenever **Post pipeline** fails, at any node. It finds the post by the run id the pipeline stored on it, and reports the **full** error: the post gets status *error*, the message, the failed step (so *Retry* continues from there), a progress-log line and a Telegram message with Retry buttons.",
+        "width": 560,
+        "height": 200,
+        "color": 2
+      }
+    },
+    {
+      "id": "4ced6011-9ebd-298c-52ff-28130b5a81f2",
+      "name": "When the pipeline fails",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        100
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "2e791188-e2ec-974b-4610-58707c8a6371",
+      "name": "Find the post of this run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        100
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts?filter[run_id][_eq]={{ $json.execution.id }}&fields=id,current_stage&limit=1",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "58fd4d82-406a-e05d-28fc-4dbb94ab1de1",
+      "name": "Describe the error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const post = $input.first().json.data?.[0];\nif (!post) return []; // the run failed before it was linked to a post\nconst ex = $('When the pipeline fails').item.json.execution;\nconst err = ex.error || {};\nreturn [{ json: {\n  postId: post.id,\n  stage: post.current_stage || 'write',\n  state: 'error',\n  error: {\n    node: ex.lastNodeExecuted || err.node?.name,\n    message: err.message || 'Unknown error',\n    description: err.description || (err.cause && JSON.stringify(err.cause)) || undefined,\n    httpCode: err.httpCode,\n    executionUrl: ex.url,\n  },\n} }];"
+      }
+    },
+    {
+      "id": "f3e03d4c-c24b-aa41-5f09-ea758f7855f2",
+      "name": "Report the error",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WORKER_URL }}/stage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WORKER_SECRET }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      }
+    }
+  ],
+  "connections": {
+    "When the pipeline fails": {
+      "main": [
+        [
+          {
+            "node": "Find the post of this run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find the post of this run": {
+      "main": [
+        [
+          {
+            "node": "Describe the error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Describe the error": {
+      "main": [
+        [
+          {
+            "node": "Report the error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

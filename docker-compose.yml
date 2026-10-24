@@ -96,8 +96,6 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       X_ENABLED: ${X_ENABLED:-false}
       REDDIT_ENABLED: ${REDDIT_ENABLED:-false}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     volumes:
       - n8n_data:/home/node/.n8n
       - ./n8n:/bootstrap:ro
@@ -112,7 +110,13 @@ services:
     environment:
       <<: *pipeline-env
       WORKER_SECRET: ${WORKER_SECRET}
+      DIRECTUS_PUBLIC_URL: https://${CMS_DOMAIN}
+      TZ: ${TIMEZONE:-Asia/Tehran}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      # Telegram: step-by-step updates and the bot (buttons, replies, files)
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_WEBHOOK_URL: https://${CMS_DOMAIN}/telegram/webhook
       TRANSCRIBE_BASE_URL: ${TRANSCRIBE_BASE_URL:-https://api.groq.com/openai/v1}
       TRANSCRIBE_API_KEY: ${TRANSCRIBE_API_KEY:-}
       TRANSCRIBE_MODEL: ${TRANSCRIBE_MODEL:-whisper-large-v3}

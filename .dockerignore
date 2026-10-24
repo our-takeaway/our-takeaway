@@ -4,3 +4,4 @@
 **/www
 .env
 .git
+.test-stack

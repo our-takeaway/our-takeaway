@@ -2,7 +2,7 @@
 FROM node:24-bookworm-slim
 
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends ffmpeg ca-certificates curl \
+	&& apt-get install -y --no-install-recommends ffmpeg ca-certificates curl unzip poppler-utils \
 	&& rm -rf /var/lib/apt/lists/*
 
 ENV ASTRO_TELEMETRY_DISABLED=1 NODE_ENV=production

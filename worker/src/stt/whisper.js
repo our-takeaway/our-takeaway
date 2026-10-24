@@ -7,14 +7,14 @@ import { slowFetch } from '../http.js';
 // Whisper — the backup. Any OpenAI-compatible /audio/transcriptions endpoint
 // (Groq by default). Cheaper, weaker on Persian, no speaker labels.
 
-const cfg = () => ({
+const cfg = (model) => ({
 	baseUrl: (process.env.TRANSCRIBE_BASE_URL || 'https://api.groq.com/openai/v1').replace(/\/$/, ''),
 	apiKey: process.env.TRANSCRIBE_API_KEY || '',
-	model: process.env.TRANSCRIBE_MODEL || 'whisper-large-v3',
+	model: model || process.env.TRANSCRIBE_MODEL || 'whisper-large-v3',
 });
 
-async function transcribeChunk(file, { language, prompt }) {
-	const c = cfg();
+async function transcribeChunk(file, { model, language, prompt }) {
+	const c = cfg(model);
 	const form = new FormData();
 	form.append('file', new Blob([await fs.readFile(file)], { type: 'audio/ogg' }), path.basename(file));
 	form.append('model', c.model);
@@ -34,11 +34,11 @@ async function transcribeChunk(file, { language, prompt }) {
 			await new Promise((r) => setTimeout(r, attempt * 10_000));
 			continue;
 		}
-		throw new Error(`Whisper transcription failed (${res.status}): ${body.slice(0, 400)}`);
+		throw new Error(`Whisper transcription failed (${res.status}): ${body}`);
 	}
 }
 
-export async function transcribeWithWhisper(audioFile, workDir, { language, keyterms = [] } = {}) {
+export async function transcribeWithWhisper(audioFile, workDir, { model, language, keyterms = [] } = {}) {
 	if (!cfg().apiKey) throw new Error('TRANSCRIBE_API_KEY is not set on the server (needed for Whisper).');
 	const chunkDir = path.join(workDir, 'chunks');
 	await fs.mkdir(chunkDir, { recursive: true });
@@ -47,7 +47,7 @@ export async function transcribeWithWhisper(audioFile, workDir, { language, keyt
 	for (const chunk of chunks) {
 		// Key terms plus the end of the previous chunk keep spelling consistent.
 		const prompt = [keyterms.join(', '), parts.join(' ').slice(-400)].filter(Boolean).join('\n');
-		parts.push(await transcribeChunk(chunk, { language, prompt }));
+		parts.push(await transcribeChunk(chunk, { model, language, prompt }));
 	}
-	return parts.join('\n\n');
+	return { text: parts.join('\n\n'), language: language || null };
 }

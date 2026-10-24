@@ -32,7 +32,13 @@ www.{$SITE_DOMAIN} {
 	request_body {
 		max_size 5GB
 	}
-	reverse_proxy directus:8055
+	# Telegram bot → worker (the worker checks Telegram's secret header)
+	handle /telegram/* {
+		reverse_proxy worker:4000
+	}
+	handle {
+		reverse_proxy directus:8055
+	}
 }
 
 # ── n8n: the workflow editor ────────────────────────────────────────────────

@@ -39,13 +39,16 @@ export function toTurns(result) {
 	return turns.map((t) => `[${clock(t.start)}] ${label(t.speaker)}: ${t.text.trim()}`).join('\n\n');
 }
 
-export async function transcribeWithElevenLabs(audioFile, { language, keyterms = [] } = {}) {
+// ElevenLabs answers with ISO-639-3 codes (fas, eng…); we use fa / en.
+const SHORT = { fas: 'fa', per: 'fa', eng: 'en' };
+
+export async function transcribeWithElevenLabs(audioFile, { model = 'scribe_v2', language, keyterms = [] } = {}) {
 	const key = process.env.ELEVENLABS_API_KEY;
 	if (!key) throw new Error('ELEVENLABS_API_KEY is not set on the server.');
 
 	const form = new FormData();
 	form.append('file', new Blob([await fs.readFile(audioFile)], { type: 'audio/ogg' }), path.basename(audioFile));
-	form.append('model_id', process.env.ELEVENLABS_MODEL || 'scribe_v2');
+	form.append('model_id', model);
 	form.append('diarize', 'true');
 	form.append('tag_audio_events', 'false');
 	form.append('timestamps_granularity', 'word');
@@ -58,7 +61,11 @@ export async function transcribeWithElevenLabs(audioFile, { language, keyterms =
 			headers: { 'xi-api-key': key },
 			body: form,
 		});
-		if (res.ok) return toTurns(await res.json());
+		if (res.ok) {
+			const result = await res.json();
+			const code = result.language_code || '';
+			return { text: toTurns(result), language: SHORT[code] || code.slice(0, 2) || null };
+		}
 
 		const body = await res.text();
 		if ((res.status === 429 || res.status >= 500) && attempt < 4) {
@@ -67,6 +74,6 @@ export async function transcribeWithElevenLabs(audioFile, { language, keyterms =
 		}
 		if (res.status === 401) throw new Error('ElevenLabs rejected the API key (401). Check ELEVENLABS_API_KEY.');
 		if (res.status === 402) throw new Error('ElevenLabs: not enough credits on the account (402).');
-		throw new Error(`ElevenLabs transcription failed (${res.status}): ${body.slice(0, 400)}`);
+		throw new Error(`ElevenLabs transcription failed (${res.status}): ${body}`);
 	}
 }
