@@ -11,6 +11,7 @@ const posts = defineCollection({
 		description: z.string(),
 		tags: z.array(z.string()).default([]),
 		meeting: z.number().int().optional(),
+		sourceLang: z.enum(['fa', 'en']).optional(),
 		pubDate: z.coerce.date(),
 		updatedDate: z.coerce.date().optional(),
 		langs: z.array(z.enum(['fa', 'en'])),

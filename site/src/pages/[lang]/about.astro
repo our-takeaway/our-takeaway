@@ -1,5 +1,5 @@
 ---
-import { SITE, type Lang } from '../../consts';
+import { CONTACT_EMAIL, SITE, type Lang } from '../../consts';
 import Base from '../../layouts/Base.astro';
 import { langPaths, otherLang, t } from '../../lib/i18n';
 
@@ -18,6 +18,11 @@ const site = SITE[lang];
 			<p>{t(lang, 'howItWorksText')}</p>
 			<h2>{t(lang, 'authors')}</h2>
 			<ul>{site.authors.map((a) => <li>{a}</li>)}</ul>
+			<h2>{t(lang, 'contact')}</h2>
+			<p>
+				{t(lang, 'askUs')} {t(lang, 'emailUs')}{' '}
+				<a href={`mailto:${CONTACT_EMAIL}`}><bdi dir="ltr">{CONTACT_EMAIL}</bdi></a>
+			</p>
 		</div>
 	</article>
 </Base>

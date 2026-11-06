@@ -24,6 +24,9 @@ export const SITE = {
 	},
 } satisfies Record<Lang, unknown>;
 
+// Shown at the end of every post, on the About page and in the footer.
+export const CONTACT_EMAIL = 'sajad.sarlaki1999@gmail.com';
+
 export const LINKS: { label: string; href: string }[] = [
 	// { label: 'X', href: 'https://x.com/your-handle' },
 	// { label: 'Reddit', href: 'https://reddit.com/u/your-handle' },

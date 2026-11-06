@@ -20,6 +20,14 @@ const strings = {
 		notFound: 'این صفحه پیدا نشد',
 		backHome: 'برگردید به صفحهٔ اول',
 		switchTo: 'English',
+		skipToContent: 'رفتن به محتوای اصلی',
+		contact: 'تماس',
+		askUs: 'شما هم به همین مشکل خورده‌اید یا می‌خواهید بیشتر بدانید؟',
+		emailUs: 'به ما ایمیل بزنید:',
+		aiNote:
+			'پیش‌نویس این یادداشت را یک مدل هوش مصنوعی از روی متن جلسه نوشته است. ما آن را خواندیم، ویرایش کردیم و بعد منتشرش کردیم.',
+		translatedNote: 'جلسه به انگلیسی بود و این نسخهٔ فارسی را هوش مصنوعی ترجمه کرده است.',
+		readOriginal: 'خواندن نسخهٔ اصلی',
 	},
 	en: {
 		home: 'Home',
@@ -40,6 +48,14 @@ const strings = {
 		notFound: 'Page not found',
 		backHome: 'Back to the home page',
 		switchTo: 'فارسی',
+		skipToContent: 'Skip to content',
+		contact: 'Contact',
+		askUs: 'Ran into the same problem, or want to know more?',
+		emailUs: 'Email us:',
+		aiNote:
+			'An AI model drafted this note from the session transcript. We read it, edited it and approved it before publishing.',
+		translatedNote: 'The session was in Persian, and this English version was translated by AI.',
+		readOriginal: 'Read the original',
 	},
 } satisfies Record<Lang, Record<string, string>>;
 

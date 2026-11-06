@@ -3,16 +3,18 @@ import PostList from '../../../components/PostList.astro';
 import { LANGS, type Lang } from '../../../consts';
 import Base from '../../../layouts/Base.astro';
 import { getPosts } from '../../../lib/posts';
+import { tagSlug } from '../../../lib/tags';
 
 export async function getStaticPaths() {
 	const paths = [];
 	for (const lang of LANGS) {
 		const posts = await getPosts(lang);
-		const tags = [...new Set(posts.flatMap((p) => p.data.tags))];
+		// slug → the spelling posts show (already the same on every post, see lib/tags.ts)
+		const tags = new Map(posts.flatMap((p) => p.data.tags).map((tag) => [tagSlug(tag), tag]));
 		paths.push(
-			...tags.map((tag) => ({
-				params: { lang, tag },
-				props: { posts: posts.filter((p) => p.data.tags.includes(tag)) },
+			...[...tags].map(([slug, label]) => ({
+				params: { lang, tag: slug },
+				props: { label, posts: posts.filter((p) => p.data.tags.some((tag) => tagSlug(tag) === slug)) },
 			})),
 		);
 	}
@@ -20,11 +22,10 @@ export async function getStaticPaths() {
 }
 
 const lang = Astro.params.lang as Lang;
-const { tag } = Astro.params;
-const { posts } = Astro.props;
+const { label, posts } = Astro.props;
 ---
 
-<Base lang={lang} title={`#${tag}`}>
-	<h1>#{tag}</h1>
+<Base lang={lang} title={`#${label}`}>
+	<h1>#{label}</h1>
 	<PostList lang={lang} posts={posts} />
 </Base>
