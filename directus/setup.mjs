@@ -89,6 +89,7 @@ const DEFAULT_STT = STT_CHOICES[0];
 const STATUS = choices([
 	['new', 'New — start (you)', '#A2B5CD'],
 	['transcribing', 'Transcribing…', '#3399FF'],
+	['speakers', 'Who is speaking? Fill Notes ("Speaker 1 = Sajad"), then Retry (you)', '#FFA439'],
 	['writing', 'AI is writing…', '#3399FF'],
 	['translating', 'Translating…', '#3399FF'],
 	['review', 'Ready for review', '#FFA439'],

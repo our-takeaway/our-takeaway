@@ -81,6 +81,29 @@ export const answerCallback = (id, text) => call('answerCallbackQuery', { callba
 export const clearButtons = (chatId, messageId) =>
 	call('editMessageReplyMarkup', { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } }).catch(() => {});
 
+// Edit a message in place. Resolves true when the message now shows this text
+// (also when nothing changed), false when it can't be edited (deleted, too old…).
+export async function editText(chatId, messageId, text, buttons) {
+	try {
+		await call('editMessageText', {
+			chat_id: chatId,
+			message_id: messageId,
+			text,
+			parse_mode: 'HTML',
+			disable_web_page_preview: true,
+			reply_markup: keyboard(buttons) ?? { inline_keyboard: [] },
+		});
+		return true;
+	} catch (e) {
+		if (/not modified/i.test(e.message)) return true;
+		console.error('telegram:', e.message);
+		return false;
+	}
+}
+
+export const deleteMessage = (chatId, messageId) =>
+	call('deleteMessage', { chat_id: chatId, message_id: messageId }).then(() => true, () => false);
+
 export async function downloadTelegramFile(fileId) {
 	const file = await call('getFile', { file_id: fileId });
 	const res = await slowFetch(fileUrl(file.file_path));
@@ -89,5 +112,14 @@ export async function downloadTelegramFile(fileId) {
 }
 
 export async function setWebhook(url, secret) {
-	return call('setWebhook', { url, secret_token: secret, allowed_updates: ['message', 'callback_query'], drop_pending_updates: false });
+	await call('setWebhook', { url, secret_token: secret, allowed_updates: ['message', 'callback_query'], drop_pending_updates: false });
+	// the "/" menu in Telegram
+	await call('setMyCommands', {
+		commands: [
+			{ command: 'posts', description: 'Every post; open its card' },
+			{ command: 'post', description: 'Open one post, e.g. /post 12' },
+			{ command: 'settings', description: 'Default models, prompts, names and terms' },
+			{ command: 'help', description: 'How the bot works' },
+		],
+	}).catch((e) => console.error('telegram commands:', e.message));
 }

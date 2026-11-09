@@ -21,6 +21,10 @@ export const getPost = (id) => directus('GET', `/items/posts/${encodeURIComponen
 export const updatePost = (id, data) => directus('PATCH', `/items/posts/${encodeURIComponent(id)}`, data);
 export const createPost = (data) => directus('POST', '/items/posts', data);
 export const getSettings = () => directus('GET', '/items/writer_settings');
+export const updateSettings = (data) => directus('PATCH', '/items/writer_settings', data);
+export const deletePost = (id) => directus('DELETE', `/items/posts/${encodeURIComponent(id)}`);
+export const listPosts = (offset = 0, limit = 10) =>
+	directus('GET', `/items/posts?fields=id,status,title,title_fa,title_en&sort=-date_created&limit=${limit}&offset=${offset}`);
 
 export async function fileInfo(id) {
 	return directus('GET', `/files/${encodeURIComponent(id)}?fields=id,filename_download,type,filesize`);
@@ -42,4 +46,13 @@ export async function uploadFile(filename, buffer, type = 'application/octet-str
 	return JSON.parse(text).data.id;
 }
 
-export const cmsLink = (id) => `${(process.env.DIRECTUS_PUBLIC_URL || base()).replace(/\/$/, '')}/admin/content/posts/${id}`;
+const cmsBase = () => (process.env.DIRECTUS_PUBLIC_URL || base()).replace(/\/$/, '');
+export const cmsLink = (id) => `${cmsBase()}/admin/content/posts/${id}`;
+export const cmsSettingsLink = () => `${cmsBase()}/admin/content/writer_settings`;
+
+// The public address of a post on the site (Persian first, like the social posts' fallback).
+export function postUrl(post) {
+	const site = (process.env.SITE_URL || '').replace(/\/$/, '');
+	const lang = ['fa', 'en'].find((l) => post[`body_${l}`]?.trim() && post[`title_${l}`]);
+	return site && post.slug && lang ? `${site}/${lang}/blog/${post.slug}/` : null;
+}

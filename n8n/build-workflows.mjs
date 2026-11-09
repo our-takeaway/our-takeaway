@@ -119,7 +119,7 @@ const p = workflow(PIPELINE_ID, 'Post pipeline');
 
 p.note('overview',
 	'## Post pipeline\nDirectus sends every change to a **post** here. The new **status** decides what runs:\n' +
-	'- **new** → transcription → writing (meeting language) → translation → *review*\n' +
+	'- **new** → transcription → (several voices? wait for their names) → writing (meeting language) → translation → *review*\n' +
 	'- **revise** → writing with your feedback → translation\n' +
 	'- **retry** → from the step that failed (or "Restart from")\n' +
 	'- **approved** → publish · **archived** → remove from site\n\n' +
@@ -199,8 +199,25 @@ p.chain(tStart, tRun, tSave, tDone);
 // ---- 2. writing (in the meeting's language) ----
 p.note('write', '### 2 · Writing\nThe post is written in the meeting\'s language with the **Writing prompt** from Writer Settings. With status *revise*, the current draft and your Feedback are sent too.', [1060, 360], [620, 130], 5);
 const needWrite = ifTrue(p, 'Write?', [2200, 100], "['transcribe', 'write'].includes($('Where to start').item.json.start)");
-p.connect(needTranscript, needWrite, 1);
-p.connect(tDone, needWrite);
+
+// ---- 1b. who is speaking? ----
+p.note('speakers', '### 1b · Who is speaking?\nWhen a run starts from the transcription, the transcript has two or more voices and Notes has no "Speaker 1 = …" yet, ' +
+	'the run stops here: the post waits (status *speakers*) and Telegram asks for the names, with a few words from each voice. ' +
+	'Naming them (or "write it as we") continues with writing. In the CMS: fill Notes, then set the status to Retry.', [2140, -820], [620, 170], 5);
+const sGet = getPost(p, 'Get the post (speakers)', [2200, -420]);
+const sCheck = code(p, 'Who is speaking?', [2420, -420], `
+const post = $json.data;
+const transcript = post.transcript || '';
+const voices = [...new Set([...transcript.matchAll(/^\\[[^\\]]*\\]\\s*Speaker (\\d+):/gm)].map((m) => m[1]))];
+const named = /speaker\\s*\\d+\\s*[=:]/i.test(post.notes || '');
+return { json: { ask: $('Where to start').item.json.start === 'transcribe' && !named && voices.length > 1, voices: voices.length } };`);
+const sAsk = ifTrue(p, 'Ask for speaker names?', [2640, -420], '$json.ask');
+const sWait = report(p, 'Report: waiting for speaker names', [2860, -520], 'speakers', 'start', "{ voices: $('Who is speaking?').item.json.voices }");
+p.connect(needTranscript, sGet, 1);
+p.connect(tDone, sGet);
+p.chain(sGet, sCheck, sAsk);
+p.connect(sAsk, sWait, 0);
+p.connect(sAsk, needWrite, 1);
 
 const wPost = getPost(p, 'Get the post (writing)', [2420, 0]);
 const wSettings = getSettings(p, 'Get writer settings (writing)', [2640, 0]);

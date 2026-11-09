@@ -123,8 +123,11 @@ services:
       TRANSCRIBE_BASE_URL: ${TRANSCRIBE_BASE_URL:-https://api.groq.com/openai/v1}
       TRANSCRIBE_API_KEY: ${TRANSCRIBE_API_KEY:-}
       TRANSCRIBE_MODEL: ${TRANSCRIBE_MODEL:-whisper-large-v3}
+      # which Telegram message is each post's live card
+      BOT_STATE_FILE: /data/telegram-cards.json
     volumes:
       - www:/www
+      - bot_data:/data
     mem_limit: 1200m
 
   # Private search engine (no public port), reachable inside Docker at http://searxng:8080
@@ -160,5 +163,6 @@ volumes:
   directus_uploads:
   n8n_data:
   www:
+  bot_data:
   caddy_data:
   caddy_config:

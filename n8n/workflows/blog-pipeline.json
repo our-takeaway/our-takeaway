@@ -12,7 +12,7 @@
         -560
       ],
       "parameters": {
-        "content": "## Post pipeline\nDirectus sends every change to a **post** here. The new **status** decides what runs:\n- **new** → transcription → writing (meeting language) → translation → *review*\n- **revise** → writing with your feedback → translation\n- **retry** → from the step that failed (or \"Restart from\")\n- **approved** → publish · **archived** → remove from site\n\nEvery step reports to the worker (**Report: …** nodes): status, progress log, Telegram. Any failure anywhere is caught by the **Pipeline errors** workflow.",
+        "content": "## Post pipeline\nDirectus sends every change to a **post** here. The new **status** decides what runs:\n- **new** → transcription → (several voices? wait for their names) → writing (meeting language) → translation → *review*\n- **revise** → writing with your feedback → translation\n- **retry** → from the step that failed (or \"Restart from\")\n- **approved** → publish · **archived** → remove from site\n\nEvery step reports to the worker (**Report: …** nodes): status, progress log, Telegram. Any failure anywhere is caught by the **Pipeline errors** workflow.",
         "width": 560,
         "height": 300,
         "color": 4
@@ -413,6 +413,122 @@
         },
         "looseTypeValidation": true,
         "options": {}
+      }
+    },
+    {
+      "id": "3753b56d-c129-3dda-2cbe-c2fb3187cb90",
+      "name": "Note: speakers",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2140,
+        -820
+      ],
+      "parameters": {
+        "content": "### 1b · Who is speaking?\nWhen a run starts from the transcription, the transcript has two or more voices and Notes has no \"Speaker 1 = …\" yet, the run stops here: the post waits (status *speakers*) and Telegram asks for the names, with a few words from each voice. Naming them (or \"write it as we\") continues with writing. In the CMS: fill Notes, then set the status to Retry.",
+        "width": 620,
+        "height": 170,
+        "color": 5
+      }
+    },
+    {
+      "id": "88a1c410-4e4e-6a78-dc2b-f4ba4a052bce",
+      "name": "Get the post (speakers)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        -420
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DIRECTUS_URL }}/items/posts/{{ $('Where to start').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DIRECTUS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "bd89a147-4d12-eb4f-1530-14b1063acda9",
+      "name": "Who is speaking?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        -420
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const post = $json.data;\nconst transcript = post.transcript || '';\nconst voices = [...new Set([...transcript.matchAll(/^\\[[^\\]]*\\]\\s*Speaker (\\d+):/gm)].map((m) => m[1]))];\nconst named = /speaker\\s*\\d+\\s*[=:]/i.test(post.notes || '');\nreturn { json: { ask: $('Where to start').item.json.start === 'transcribe' && !named && voices.length > 1, voices: voices.length } };"
+      }
+    },
+    {
+      "id": "37d7a59c-0f6e-7732-a161-f258dbd5035d",
+      "name": "Ask for speaker names?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        -420
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "0868d506-fcb6-b443-ab2c-070ba773dae8",
+              "leftValue": "={{ $json.ask }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "f88cb24c-1fda-3a6a-b7a2-e186e11b677c",
+      "name": "Report: waiting for speaker names",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        -520
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WORKER_URL }}/stage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WORKER_SECRET }}"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ postId: $('Where to start').item.json.id, stage: \"speakers\", state: \"start\", info: { voices: $('Who is speaking?').item.json.voices } }) }}"
       }
     },
     {
@@ -1413,7 +1529,7 @@
         ],
         [
           {
-            "node": "Write?",
+            "node": "Get the post (speakers)",
             "type": "main",
             "index": 0
           }
@@ -1455,6 +1571,46 @@
     },
     "Report: transcription done": {
       "main": [
+        [
+          {
+            "node": "Get the post (speakers)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get the post (speakers)": {
+      "main": [
+        [
+          {
+            "node": "Who is speaking?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Who is speaking?": {
+      "main": [
+        [
+          {
+            "node": "Ask for speaker names?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask for speaker names?": {
+      "main": [
+        [
+          {
+            "node": "Report: waiting for speaker names",
+            "type": "main",
+            "index": 0
+          }
+        ],
         [
           {
             "node": "Write?",
