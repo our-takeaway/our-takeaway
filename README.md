@@ -190,10 +190,12 @@ docker compose logs -f directus-setup n8n worker
 
 - **workflow:** در n8n ویرایش کنید و Publish بزنید. روش برگرداندن تغییرات به repo در [n8n/README.md](n8n/README.md) است.
 - **فیلدهای CMS:** در Directus از Settings → Data Model اضافه کنید، یا در `directus/setup.mjs` تعریف کنید تا روی نصب‌های تازه هم ساخته شوند.
-- **دیزاین سایت:** `site/src/`، متن‌های ثابت در `site/src/consts.ts` و `site/src/lib/i18n.ts`. بعد از تغییر:
+- **دیزاین سایت:** `site/src/`، متن‌های ثابت در `site/src/consts.ts` و `site/src/lib/i18n.ts`. بعد از تغییر، روی سرور:
   ```bash
-  docker compose up -d --build worker
+  git pull && docker compose up -d --build
   ```
+  worker هر بار که بالا می‌آید سایت را از نو build می‌کند، پس همین یک دستور کد جدید و پست‌های تازه را منتشر می‌کند. تا وقتی build جدید تمام نشده، نسخهٔ قبلی سایت آنلاین می‌ماند (`docker compose logs -f worker` پیشرفتش را نشان می‌دهد).
+  - `docker compose restart` هم سایت را دوباره build می‌کند، ولی **کد جدید را نمی‌گیرد**، چون image را از نو نمی‌سازد. برای کد جدید همیشه `--build` لازم است.
 
 ### اجرای سایت به‌تنهایی روی لپ‌تاپ
 بدون `DIRECTUS_URL`، سایت پست‌های نمونهٔ `site/src/content/sample/` را نشان می‌دهد:

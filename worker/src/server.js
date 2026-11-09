@@ -91,13 +91,19 @@ http
 				.catch((e) => console.error('telegram webhook setup failed:', e.message));
 		}
 
-		// On a fresh server Directus may not have its tables yet, so keep trying for a while.
-		for (let attempt = 1; attempt <= 20 && !(await hasLiveSite()); attempt++) {
-			console.log(`no built site yet — building (attempt ${attempt})…`);
+		// Rebuild the site every time the worker starts, so `docker compose up -d --build`
+		// (new site code) or `docker compose restart` (latest posts) puts it live right away.
+		// The current site stays online until a build succeeds. On a fresh server Directus
+		// may not have its tables yet, so keep trying for a while.
+		for (let attempt = 1; attempt <= 20; attempt++) {
+			console.log(`building the site on startup (attempt ${attempt})…`);
 			try {
-				await queueBuild();
+				const { release, posts } = await queueBuild();
+				console.log(`site is live: release ${release}, ${posts ?? '?'} posts`);
+				break;
 			} catch (e) {
-				console.error('initial build failed:', e.message.slice(0, 300));
+				console.error('startup build failed:', e.message.slice(0, 300));
+				if (await hasLiveSite()) console.error('the previous version of the site is still online');
 				await new Promise((r) => setTimeout(r, 30_000));
 			}
 		}

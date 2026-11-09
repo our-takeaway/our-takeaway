@@ -52,12 +52,7 @@ async function fromSamples(dir: string): Promise<Row[]> {
 		for (const file of files.filter((f) => f.endsWith('.md'))) {
 			const slug = file.replace(/\.md$/, '');
 			const { data, body } = parseFrontmatter(await fs.readFile(path.join(dir, lang, file), 'utf8'));
-			const row = rows.get(slug) ?? {
-				slug,
-				meeting_number: data.meeting ?? null,
-				published_at: data.pubDate,
-				source_language: data.sourceLang ?? null,
-			};
+			const row = rows.get(slug) ?? { slug, published_at: data.pubDate, source_language: data.sourceLang ?? null };
 			row[`title_${lang}`] = data.title;
 			row[`description_${lang}`] = data.description;
 			row[`tags_${lang}`] = data.tags ?? [];
@@ -82,6 +77,18 @@ export function directusLoader(): Loader {
 				LANGS.map((lang) => [lang, tagNormalizer(rows.map((row) => row[`tags_${lang}`] ?? []))]),
 			);
 
+			// Session numbers are worked out on every build from the order the posts were
+			// published (oldest = 1), so they always run 1, 2, 3… with no gaps, even after a
+			// post is removed or deleted. Nothing is typed in by hand.
+			const hasText = (row: Row) => LANGS.some((l) => row[`body_${l}`]?.trim() && row[`title_${l}`]);
+			const published = (row: Row) => new Date(row.published_at ?? row.date_created ?? Date.now()).valueOf() || 0;
+			const sessionNumber = new Map(
+				rows
+					.filter(hasText)
+					.sort((a, b) => published(a) - published(b) || (Number(a.id) || 0) - (Number(b.id) || 0))
+					.map((row, i) => [row, i + 1]),
+			);
+
 			store.clear();
 			for (const row of rows) {
 				// the language the session was in: the post was written in it, then translated
@@ -98,7 +105,7 @@ export function directusLoader(): Loader {
 							title: row[`title_${lang}`],
 							description: row[`description_${lang}`] ?? '',
 							tags: normalizeTags[lang](row[`tags_${lang}`] ?? []),
-							meeting: row.meeting_number ?? undefined,
+							meeting: sessionNumber.get(row),
 							sourceLang,
 							pubDate: row.published_at ?? row.date_created ?? new Date().toISOString(),
 							updatedDate: row.date_updated ?? undefined,

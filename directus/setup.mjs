@@ -4,6 +4,7 @@
 //   posts            one row per meeting → post (both languages, social texts, progress log)
 //   writer_settings  prompts, models and social settings, editable in the panel
 //   flow             "Send post events to n8n": every create/update on posts is POSTed to n8n
+//   flow             "Rebuild the site when a post is deleted": calls the worker directly
 //
 // Field labels, notes and order are kept in step with this file on every run;
 // your posts' content is never touched.
@@ -17,6 +18,8 @@ const URL_ = (process.env.DIRECTUS_URL || 'http://localhost:8055').replace(/\/$/
 const TOKEN = process.env.DIRECTUS_TOKEN;
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || 'http://n8n:5678/webhook/directus-posts';
 const N8N_WEBHOOK_SECRET = process.env.N8N_WEBHOOK_SECRET;
+const WORKER_URL = (process.env.WORKER_URL || 'http://worker:4000').replace(/\/$/, '');
+const WORKER_SECRET = process.env.WORKER_SECRET;
 if (!TOKEN || !N8N_WEBHOOK_SECRET) throw new Error('DIRECTUS_TOKEN and N8N_WEBHOOK_SECRET are required');
 
 async function api(method, path, body) {
@@ -163,7 +166,11 @@ const postFields = [
 
 	group('input_group', '1 · Meeting (input)'),
 	field('title', 'string', { interface: 'input', group: 'input_group', width: 'half', note: 'Working title (optional)' }),
-	field('meeting_number', 'integer', { interface: 'input', group: 'input_group', width: 'half' }),
+	// Not used any more: the site numbers sessions itself, by publish date. Hidden, kept so no data is dropped.
+	field('meeting_number', 'integer', {
+		interface: 'input', group: 'input_group', width: 'half', hidden: true,
+		note: 'Not used: the site numbers sessions automatically by publish date.',
+	}),
 	field('source_language', 'string', {
 		interface: 'select-dropdown', group: 'input_group', width: 'half',
 		options: { choices: options([['fa', 'Persian'], ['en', 'English']]), allowNone: true, placeholder: 'Detect automatically' },
@@ -377,8 +384,8 @@ async function ensureListView() {
 	const presets = await api('GET', '/presets?filter[collection][_eq]=posts&filter[user][_null]=true&filter[role][_null]=true&filter[bookmark][_null]=true');
 	const view = {
 		layout: 'tabular',
-		layout_query: { tabular: { fields: ['status', 'current_stage', 'meeting_number', 'title_fa', 'title_en', 'published_at'], sort: ['-date_created'] } },
-		layout_options: { tabular: { widths: { status: 190, current_stage: 130, meeting_number: 90, title_fa: 280, title_en: 280 } } },
+		layout_query: { tabular: { fields: ['status', 'current_stage', 'title_fa', 'title_en', 'published_at'], sort: ['-date_created'] } },
+		layout_options: { tabular: { widths: { status: 190, current_stage: 130, title_fa: 300, title_en: 300 } } },
 	};
 	if (presets.length) await api('PATCH', `/presets/${presets[0].id}`, view);
 	else await api('POST', '/presets', { collection: 'posts', ...view });
@@ -416,6 +423,43 @@ async function ensureFlow() {
 	console.log(`created flow "${name}"`);
 }
 
+// Deleting a post (instead of setting it to "Removed") doesn't go through n8n, so this
+// flow asks the worker to rebuild the site directly. The rebuild also renumbers sessions.
+async function ensureRebuildOnDeleteFlow() {
+	const name = 'Rebuild the site when a post is deleted';
+	if (!WORKER_SECRET) {
+		console.log(`WORKER_SECRET not set: skipped flow "${name}"`);
+		return;
+	}
+	const flows = await api('GET', `/flows?filter[name][_eq]=${encodeURIComponent(name)}`);
+	if (flows.length) return;
+	const flow = await api('POST', '/flows', {
+		name,
+		icon: 'autorenew',
+		color: '#0F6B62',
+		description: 'A deleted post disappears from the site right away, and the session numbers are updated.',
+		status: 'active',
+		trigger: 'event',
+		accountability: 'all',
+		options: { type: 'action', scope: ['items.delete'], collections: ['posts'] },
+	});
+	const op = await api('POST', '/operations', {
+		flow: flow.id,
+		name: 'Rebuild the site',
+		key: 'rebuild_site',
+		type: 'request',
+		position_x: 19,
+		position_y: 1,
+		options: {
+			method: 'POST',
+			url: `${WORKER_URL}/build`,
+			headers: [{ header: 'Authorization', value: `Bearer ${WORKER_SECRET}` }],
+		},
+	});
+	await api('PATCH', `/flows/${flow.id}`, { operation: op.id });
+	console.log(`created flow "${name}"`);
+}
+
 await waitForDirectus();
 await ensureCollection('posts', {
 	icon: 'article',
@@ -434,4 +478,5 @@ await ensureSettings(oldProvider);
 await removeFields('writer_settings', ['transcription_provider']);
 await migratePosts();
 await ensureFlow();
+await ensureRebuildOnDeleteFlow();
 console.log('Directus is ready.');

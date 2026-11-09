@@ -65,6 +65,9 @@ services:
       DIRECTUS_TOKEN: ${DIRECTUS_TOKEN}
       N8N_WEBHOOK_URL: http://n8n:5678/webhook/directus-posts
       N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET}
+      # for the "rebuild the site when a post is deleted" flow
+      WORKER_URL: http://worker:4000
+      WORKER_SECRET: ${WORKER_SECRET}
     volumes:
       - ./directus:/setup:ro
 
