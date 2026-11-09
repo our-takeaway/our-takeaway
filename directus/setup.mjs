@@ -354,10 +354,12 @@ const OLD_WRITER_PROMPTS = [
 	'e40c1a333f39d6e29f57a5acd2181c8aa7d9b0f0705980b1420deb23822d12a1', // bilingual, one step
 	'f5df1509fb7fe790a680a1f1388dcc03e52319236e8d3739d0fc4b17088639f8', // per language
 	'6613a6dde632c205f48bc7aaca1b629beddf5524cb8115db4eb20cec885bf41e', // quotes and covers, hosts-only names
+	'0e4a29a4f0ffdafb91c34dfc00cd57f9a3646a53ccc8792e89280fa92b5d17c6', // any named speaker
 ];
 const OLD_TRANSLATOR_PROMPTS = [
 	'82434469844885c8fca64f5a0c74c760aba153573d1f4fb33684f9bef87edac6',
 	'e6eb9f05702e2138ec3f27ed11d58c973c99711a5d6b13058077939e9a2c78da',
+	'e1ae0817d72ae243397d6f0c16797ae48e5615323092d709abe37a16ce969e0d',
 ];
 
 async function ensureSettings(oldProvider) {

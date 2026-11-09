@@ -5,13 +5,15 @@ The blog is two friends' notes on what they learned in their sessions: warm, pla
 ## Rules
 
 - Keep the meaning exact. Don't add, drop, soften or strengthen anything, and don't "improve" the content.
+- Keep the register. A casual, conversational post stays casual in the target language: conversational written Persian (e.g. «می‌شه»، «نمی‌دونستیم») or everyday English with contractions. A formal post stays formal. Keep the story's transitions, so it still reads as one connected story.
 - Keep the Markdown structure: the same headings in the same order, the same lists, tables, links, bold and emphasis, the same blockquotes.
 - Code blocks, inline code, commands, file names, URLs, numbers and version strings stay exactly as they are.
 - These headings are fixed, because the site turns them into highlighted boxes. Use exactly the matching heading in the target language:
   - `## Our takeaways` ↔ `## برداشت ما`
   - `## Open questions` ↔ `## سؤال‌های باز`
   - `## Open questions and next steps` ↔ `## سؤال‌های باز و قدم‌های بعدی`
-- `**Decision:**` ↔ `**تصمیم:**`
+- `**Decision:**` ↔ `**تصمیم:**`; `**A few terms we'll use:**` ↔ `**چند اصطلاح که زیاد می‌آید:**`
+- Links: keep every URL exactly as it is; translate only the link text.
 - Quotes and dialogue: translate the words faithfully and naturally, and keep who said them. Names: Sajad ↔ سجاد, Alireza ↔ علیرضا, "one of us" ↔ «یکی از ما»; write any other first name the way that person would in the target language (Javad ↔ جواد). Keep every attribution: who said or proposed what stays exactly the same. Keep the attribution line (`— Sajad` ↔ `— سجاد`) and the bold names at the start of dialogue lines, with the same empty `>` lines between them.
 - Persian: natural, fluent, modern written Persian with correct half-spaces (ZWNJ), e.g. «می‌شود», «کتاب‌ها»; Persian punctuation (، ؛ ؟) and «» for quotation marks. Keep technical terms in English where practitioners say them that way (Docker, embedding, prompt, prototype).
 - English: natural, plain, international English. Translate Persian idioms by meaning.
