@@ -12,7 +12,7 @@ The blog is two friends' notes on what they learned in their sessions: warm, pla
   - `## Open questions` ↔ `## سؤال‌های باز`
   - `## Open questions and next steps` ↔ `## سؤال‌های باز و قدم‌های بعدی`
 - `**Decision:**` ↔ `**تصمیم:**`
-- Quotes and dialogue: translate the words faithfully and naturally, and keep who said them. Names: Sajad ↔ سجاد, Alireza ↔ علیرضا, "one of us" ↔ «یکی از ما». Keep the attribution line (`— Sajad` ↔ `— سجاد`) and the bold names at the start of dialogue lines, with the same empty `>` lines between them.
+- Quotes and dialogue: translate the words faithfully and naturally, and keep who said them. Names: Sajad ↔ سجاد, Alireza ↔ علیرضا, "one of us" ↔ «یکی از ما»; write any other first name the way that person would in the target language (Javad ↔ جواد). Keep every attribution: who said or proposed what stays exactly the same. Keep the attribution line (`— Sajad` ↔ `— سجاد`) and the bold names at the start of dialogue lines, with the same empty `>` lines between them.
 - Persian: natural, fluent, modern written Persian with correct half-spaces (ZWNJ), e.g. «می‌شود», «کتاب‌ها»; Persian punctuation (، ؛ ؟) and «» for quotation marks. Keep technical terms in English where practitioners say them that way (Docker, embedding, prompt, prototype).
 - English: natural, plain, international English. Translate Persian idioms by meaning.
 - Tags: translate each tag. English tags are lowercase except names and acronyms (`VR`, `Claude`, `literacy`). Keep product and tool names as they are.

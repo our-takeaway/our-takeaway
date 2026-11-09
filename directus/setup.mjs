@@ -353,8 +353,12 @@ const sha = (s) => createHash('sha256').update(s || '').digest('hex');
 const OLD_WRITER_PROMPTS = [
 	'e40c1a333f39d6e29f57a5acd2181c8aa7d9b0f0705980b1420deb23822d12a1', // bilingual, one step
 	'f5df1509fb7fe790a680a1f1388dcc03e52319236e8d3739d0fc4b17088639f8', // per language
+	'6613a6dde632c205f48bc7aaca1b629beddf5524cb8115db4eb20cec885bf41e', // quotes and covers, hosts-only names
 ];
-const OLD_TRANSLATOR_PROMPTS = ['82434469844885c8fca64f5a0c74c760aba153573d1f4fb33684f9bef87edac6'];
+const OLD_TRANSLATOR_PROMPTS = [
+	'82434469844885c8fca64f5a0c74c760aba153573d1f4fb33684f9bef87edac6',
+	'e6eb9f05702e2138ec3f27ed11d58c973c99711a5d6b13058077939e9a2c78da',
+];
 
 async function ensureSettings(oldProvider) {
 	const s = (await api('GET', '/items/writer_settings')) || {};
