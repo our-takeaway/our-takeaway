@@ -345,9 +345,21 @@ html[lang='fa'] .section-head h2 {
 	border-bottom: 1px solid var(--border);
 }
 .post-list a {
-	display: block;
+	display: grid;
+	grid-template-columns: 1fr 112px;
+	gap: 28px;
+	align-items: center;
 	padding: 26px 0;
 	color: inherit;
+}
+.entry-cover .cover {
+	transition: transform 0.2s;
+}
+.post-list a:hover .entry-cover .cover {
+	transform: rotate(-2deg) scale(1.03);
+}
+html[lang='fa'] .post-list a:hover .entry-cover .cover {
+	transform: rotate(2deg) scale(1.03);
 }
 .post-list h3 {
 	margin: 8px 0 6px;
@@ -410,6 +422,62 @@ html[lang='fa'] .post-list p {
 .tag:hover {
 	background: var(--accent-soft);
 	color: var(--accent-strong);
+}
+
+/* ── covers (components/Cover.astro) ────────────────────────────────────── */
+/* one hue per tone; the rest is mixed from it and the page colours, so it works in both themes */
+.cover {
+	--cv: #0f6b62;
+	--cv-bg: color-mix(in oklab, var(--cv) 16%, var(--surface));
+	--cv-mid: color-mix(in oklab, var(--cv) 36%, var(--surface));
+	--cv-strong: color-mix(in oklab, var(--cv) 78%, var(--text));
+	--cv-card: var(--surface);
+	display: block;
+	width: 100%;
+	height: auto;
+	border-radius: var(--radius);
+	border: 1px solid var(--border);
+	/* positions in Cover.astro are left-to-right; Persian covers are mirrored there */
+	direction: ltr;
+}
+.cover[data-tone='1'] {
+	--cv: #b07b16;
+}
+.cover[data-tone='2'] {
+	--cv: #b4532f;
+}
+.cover[data-tone='3'] {
+	--cv: #5b7a3a;
+}
+.cover[data-tone='4'] {
+	--cv: #7a4a8c;
+}
+.cover[data-tone='5'] {
+	--cv: #2f5a8f;
+}
+.cover-number {
+	font-family: var(--font-display);
+	font-size: 200px;
+	font-weight: 600;
+	letter-spacing: -0.02em;
+}
+.cover-thumb .cover-number {
+	font-size: 96px;
+}
+.cover-label {
+	font-family: var(--font-ui);
+	font-size: 24px;
+	font-weight: 700;
+	letter-spacing: 0.18em;
+	text-transform: uppercase;
+	opacity: 0.8;
+}
+html[lang='fa'] .cover-label {
+	letter-spacing: 0;
+	font-size: 28px;
+}
+.post-cover {
+	margin-bottom: 32px;
 }
 
 /* ── article ────────────────────────────────────────────────────────────── */
@@ -501,15 +569,53 @@ html[lang='fa'] .prose strong {
 	height: auto;
 	border-radius: var(--radius);
 }
+/* pull quotes: "> words" then "> — Name" */
 .prose blockquote {
-	margin: 1.6em 0;
-	padding: 2px 22px;
+	margin: 1.8em 0;
+	padding: 4px 24px;
 	border-inline-start: 3px solid var(--accent);
 	color: var(--text);
+	font-family: var(--font-display);
+	font-size: 1.18em;
 	font-style: italic;
+	line-height: 1.55;
 }
 html[lang='fa'] .prose blockquote {
 	font-style: normal;
+	font-weight: 500;
+	line-height: 1.9;
+}
+.prose blockquote p {
+	margin: 0 0 0.45em;
+}
+.prose blockquote p:last-child {
+	margin-bottom: 0;
+}
+/* the "— Name" line */
+.prose blockquote p:last-child:not(:first-child):not(:has(> strong:first-child)) {
+	font-family: var(--font-ui);
+	font-size: 0.7em;
+	font-style: normal;
+	font-weight: 700;
+	letter-spacing: 0.02em;
+	color: var(--muted);
+}
+/* a short dialogue: "> **Name:** words" lines */
+.prose blockquote:has(> p > strong:first-child) {
+	padding: 16px 22px;
+	background: var(--surface);
+	border-start-end-radius: var(--radius);
+	border-end-end-radius: var(--radius);
+	font-family: var(--font-body);
+	font-size: 1em;
+	font-style: normal;
+	font-weight: 400;
+}
+.prose blockquote:has(> p > strong:first-child) p {
+	margin-bottom: 0.6em;
+}
+.prose blockquote:has(> p > strong:first-child) strong {
+	color: var(--accent-strong);
 }
 .prose code {
 	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -691,6 +797,14 @@ main:focus {
 	}
 	.post-nav {
 		grid-template-columns: 1fr;
+	}
+	.post-list a {
+		grid-template-columns: 1fr 76px;
+		gap: 16px;
+		align-items: start;
+	}
+	.post-list .entry-cover {
+		margin-top: 30px;
 	}
 	.post-nav a:last-child {
 		text-align: start;

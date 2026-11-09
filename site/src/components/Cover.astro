@@ -1,0 +1,129 @@
+---
+// A cover drawn for every post: a notebook page with a few index cards, a circle,
+// a squiggle and the session number. Everything is picked from the post's slug,
+// so a post keeps the same cover in both languages and across rebuilds.
+// Colours come from global.css (.cover / data-tone) and follow light/dark mode.
+import type { Lang } from '../consts';
+import { digits, t } from '../lib/i18n';
+
+interface Props {
+	slug: string;
+	lang: Lang;
+	number?: number;
+	size?: 'banner' | 'thumb';
+}
+
+const { slug, lang, number, size = 'banner' } = Astro.props;
+
+const hash = (s: string) => {
+	let h = 2166136261;
+	for (const c of s) h = Math.imul(h ^ c.codePointAt(0)!, 16777619);
+	return h >>> 0;
+};
+// small seeded random generator (mulberry32)
+let seed = hash(slug);
+const rand = () => {
+	seed = (seed + 0x6d2b79f5) | 0;
+	let x = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+	x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+	return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+};
+const between = (a: number, b: number) => a + rand() * (b - a);
+
+const TONES = 6;
+const tone = hash(`tone:${slug}`) % TONES;
+
+const banner = size === 'banner';
+const W = banner ? 1200 : 240;
+const H = banner ? 420 : 240;
+const rtl = lang === 'fa';
+// x is measured from the "start" side, so Persian covers are mirrored
+const X = (x: number, w = 0) => (rtl ? W - x - w : x);
+
+const lineGap = banner ? 30 : 24;
+const lines = Array.from({ length: Math.floor(H / lineGap) }, (_, i) => (i + 1) * lineGap);
+const margin = banner ? 92 : 34;
+
+const cardCount = banner ? 3 : 1;
+const cards = Array.from({ length: cardCount }, (_, i) => {
+	const w = banner ? between(200, 270) : between(120, 140);
+	const h = banner ? between(120, 165) : between(84, 100);
+	const x = banner ? 150 + i * between(150, 185) : between(28, 52);
+	const y = banner ? between(55, H - h - 70) : between(34, 70);
+	return {
+		x: X(x, w),
+		y,
+		w,
+		h,
+		r: between(-12, 12),
+		lines: Array.from({ length: banner ? 3 : 2 }, (_, j) => ({ w: w * between(0.45, 0.8), y: 30 + j * (banner ? 26 : 20) })),
+	};
+});
+
+const ring = banner
+	? { cx: X(between(560, 700)), cy: between(110, 300), r: between(70, 110) }
+	: { cx: X(between(150, 190)), cy: between(50, 90), r: between(26, 36) };
+const dots = Array.from({ length: banner ? 3 : 1 }, () => ({
+	cx: X(banner ? between(120, 760) : between(36, 70)),
+	cy: banner ? between(40, H - 40) : between(18, 28),
+	r: banner ? between(6, 13) : between(5, 8),
+}));
+
+// a hand-drawn underline along the bottom
+const sx = banner ? between(130, 260) : 26;
+const sy = banner ? H - between(42, 60) : H - 30;
+const amp = banner ? 9 : 5;
+const step = banner ? 34 : 18;
+const waves = banner ? 9 : 5;
+let path = `M ${X(sx)} ${sy}`;
+for (let i = 0; i < waves; i++) {
+	const x1 = sx + step * (i + 0.5);
+	const x2 = sx + step * (i + 1);
+	path += ` Q ${X(x1)} ${sy + (i % 2 ? amp : -amp)} ${X(x2)} ${sy}`;
+}
+
+const num = number != null ? digits(number, lang) : '';
+const numX = rtl ? (banner ? 80 : 18) : W - (banner ? 80 : 18);
+const anchor = rtl ? 'start' : 'end';
+---
+
+<svg
+	class={`cover cover-${size}`}
+	data-tone={tone}
+	viewBox={`0 0 ${W} ${H}`}
+	preserveAspectRatio="xMidYMid slice"
+	aria-hidden="true"
+	focusable="false"
+>
+	<rect width={W} height={H} fill="var(--cv-bg)" />
+	{lines.map((y) => <line x1="0" x2={W} y1={y} y2={y} stroke="var(--cv-mid)" stroke-width="1" opacity="0.5" />)}
+	<line x1={X(margin)} x2={X(margin)} y1="0" y2={H} stroke="var(--cv-strong)" stroke-width={banner ? 2 : 1.5} opacity="0.28" />
+	<circle cx={ring.cx} cy={ring.cy} r={ring.r} fill="none" stroke="var(--cv-strong)" stroke-width={banner ? 2.5 : 2} opacity="0.3" />
+	{cards.map((c) => (
+		<g transform={`rotate(${c.r.toFixed(1)} ${(c.x + c.w / 2).toFixed(0)} ${(c.y + c.h / 2).toFixed(0)})`}>
+			<rect x={c.x + 6} y={c.y + 8} width={c.w} height={c.h} rx="12" fill="var(--cv-mid)" opacity="0.55" />
+			<rect x={c.x} y={c.y} width={c.w} height={c.h} rx="12" fill="var(--cv-card)" stroke="var(--cv-mid)" stroke-width="1.5" />
+			{c.lines.map((l, j) => (
+				<rect
+					x={rtl ? c.x + c.w - 20 - l.w : c.x + 20}
+					y={c.y + l.y}
+					width={l.w}
+					height={banner ? 9 : 7}
+					rx="4"
+					fill={j === 0 ? 'var(--cv-strong)' : 'var(--cv-mid)'}
+					opacity={j === 0 ? 0.75 : 0.9}
+				/>
+			))}
+		</g>
+	))}
+	{dots.map((d) => <circle cx={d.cx} cy={d.cy} r={d.r} fill="var(--cv-strong)" opacity="0.85" />)}
+	<path d={path} fill="none" stroke="var(--cv-strong)" stroke-width={banner ? 4 : 3} stroke-linecap="round" opacity="0.7" />
+	{num && (
+		<>
+			{banner && (
+				<text x={numX} y={H - 238} text-anchor={anchor} class="cover-label" fill="var(--cv-strong)">{t(lang, 'session')}</text>
+			)}
+			<text x={numX} y={banner ? H - 58 : H - 26} text-anchor={anchor} class="cover-number" fill="var(--cv-strong)">{num}</text>
+		</>
+	)}
+</svg>

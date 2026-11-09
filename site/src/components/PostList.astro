@@ -2,6 +2,7 @@
 import type { Lang } from '../consts';
 import { digits, formatDate, readingMinutes, t } from '../lib/i18n';
 import type { Post } from '../lib/posts';
+import Cover from './Cover.astro';
 
 interface Props {
 	lang: Lang;
@@ -17,16 +18,21 @@ const { lang, posts } = Astro.props;
 		{posts.map((post) => (
 			<li>
 				<a href={`/${lang}/blog/${post.data.slug}/`}>
-					<div class="meta">
-						{post.data.meeting != null && (
-							<span class="badge">{t(lang, 'meeting')} {digits(post.data.meeting, lang)}</span>
-						)}
-						<time datetime={post.data.pubDate.toISOString()}>{formatDate(post.data.pubDate, lang)}</time>
-						<span>·</span>
-						<span>{digits(readingMinutes(post.body), lang)} {t(lang, 'minRead')}</span>
+					<div class="entry-text">
+						<div class="meta">
+							{post.data.meeting != null && (
+								<span class="badge">{t(lang, 'meeting')} {digits(post.data.meeting, lang)}</span>
+							)}
+							<time datetime={post.data.pubDate.toISOString()}>{formatDate(post.data.pubDate, lang)}</time>
+							<span>·</span>
+							<span>{digits(readingMinutes(post.body), lang)} {t(lang, 'minRead')}</span>
+						</div>
+						<h3>{post.data.title}</h3>
+						<p>{post.data.description}</p>
 					</div>
-					<h3>{post.data.title}</h3>
-					<p>{post.data.description}</p>
+					<div class="entry-cover">
+						<Cover slug={post.data.slug} lang={lang} number={post.data.meeting} size="thumb" />
+					</div>
 				</a>
 			</li>
 		))}

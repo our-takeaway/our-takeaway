@@ -1,5 +1,6 @@
 ---
 import { render } from 'astro:content';
+import Cover from '../../../components/Cover.astro';
 import { LANGS, SITE, type Lang } from '../../../consts';
 import Base from '../../../layouts/Base.astro';
 import { digits, formatDate, otherLang, readingMinutes, t } from '../../../lib/i18n';
@@ -65,9 +66,9 @@ const jsonLdText = JSON.stringify(jsonLd).replace(/</g, '\\u003c');
 		<script type="application/ld+json" set:html={jsonLdText} />
 	</Fragment>
 	<article class="post">
+		<div class="post-cover"><Cover slug={slug} lang={lang} number={meeting} /></div>
 		<header class="post-header">
 			<div class="meta">
-				{meeting != null && <span class="badge">{t(lang, 'meeting')} {digits(meeting, lang)}</span>}
 				<time datetime={pubDate.toISOString()}>{formatDate(pubDate, lang)}</time>
 				<span>·</span>
 				<span>{digits(readingMinutes(post.body), lang)} {t(lang, 'minRead')}</span>

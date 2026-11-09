@@ -202,7 +202,11 @@ const postFields = [
 		translations: [{ language: 'en-US', translation: 'Names and terms' }],
 		note: 'Names and technical terms said in this meeting, so the transcription spells them right (press Enter after each).',
 	}),
-	field('notes', 'text', { interface: 'input-multiline', group: 'input_group', note: 'Optional notes for the AI writer: what to focus on, what to leave out.' }),
+	field('notes', 'text', {
+		interface: 'input-multiline', group: 'input_group',
+		options: { placeholder: 'Speaker 1 = Sajad, Speaker 2 = Alireza\nFocus on … / leave out …' },
+		note: 'Optional notes for the AI writer. Say who is who (e.g. "Speaker 1 = Sajad") so the post can say who said what; also what to focus on or leave out.',
+	}),
 	field('feedback', 'text', { interface: 'input-multiline', group: 'input_group', note: 'What should the AI change? Write it here, then set the status to "Revise with AI".' }),
 
 	group('fa_group', '2 · فارسی'),
@@ -343,14 +347,24 @@ async function ensureFileRelation(field) {
 
 const readPrompt = (name) => fs.readFile(new URL(`./prompts/${name}`, import.meta.url), 'utf8');
 const sha = (s) => createHash('sha256').update(s || '').digest('hex');
-// The first (bilingual, one-step) writing prompt. If it was never edited, it's replaced.
-const OLD_DEFAULT_PROMPT = 'e40c1a333f39d6e29f57a5acd2181c8aa7d9b0f0705980b1420deb23822d12a1';
+// Earlier default prompts (sha256 of each version this repo shipped). A saved prompt that is
+// still one of these was never edited, so it is replaced with the current file. An edited
+// prompt is kept: copy the new file into Writer Settings by hand if you want it.
+const OLD_WRITER_PROMPTS = [
+	'e40c1a333f39d6e29f57a5acd2181c8aa7d9b0f0705980b1420deb23822d12a1', // bilingual, one step
+	'f5df1509fb7fe790a680a1f1388dcc03e52319236e8d3739d0fc4b17088639f8', // per language
+];
+const OLD_TRANSLATOR_PROMPTS = ['82434469844885c8fca64f5a0c74c760aba153573d1f4fb33684f9bef87edac6'];
 
 async function ensureSettings(oldProvider) {
 	const s = (await api('GET', '/items/writer_settings')) || {};
 	const patch = {};
-	if (!s.system_prompt || sha(s.system_prompt) === OLD_DEFAULT_PROMPT) patch.system_prompt = await readPrompt('writer.md');
-	if (!s.translation_prompt) patch.translation_prompt = await readPrompt('translator.md');
+	const writer = await readPrompt('writer.md');
+	const translator = await readPrompt('translator.md');
+	if (!s.system_prompt || OLD_WRITER_PROMPTS.includes(sha(s.system_prompt))) patch.system_prompt = writer;
+	else if (s.system_prompt !== writer) console.log('writer_settings: Writing prompt was edited in Directus, kept it (the latest default is directus/prompts/writer.md)');
+	if (!s.translation_prompt || OLD_TRANSLATOR_PROMPTS.includes(sha(s.translation_prompt))) patch.translation_prompt = translator;
+	else if (s.translation_prompt !== translator) console.log('writer_settings: Translation prompt was edited in Directus, kept it (the latest default is directus/prompts/translator.md)');
 	if (!s.model) patch.model = DEFAULT_LLM;
 	if (!s.stt_model) patch.stt_model = oldProvider === 'whisper' ? 'whisper:whisper-large-v3' : DEFAULT_STT;
 	if (!s.reasoning_effort) patch.reasoning_effort = 'low';
