@@ -14,6 +14,7 @@ const latest = posts.slice(0, 6);
 
 <Base lang={lang} altHref={`/${otherLang(lang)}/`}>
 	<section class="hero">
+		<div class="eyebrow">{t(lang, 'eyebrow')}</div>
 		<h1>{SITE[lang].title}</h1>
 		{SITE[lang].intro.map((p) => <p>{p}</p>)}
 	</section>

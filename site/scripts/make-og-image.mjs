@@ -4,26 +4,32 @@
 //   cd site && node scripts/make-og-image.mjs
 //
 // It uses the fonts installed on your computer, so the result is committed
-// and the server never runs this.
+// and the server never runs this. Colours match src/styles/global.css.
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 
 const W = 1200;
 const H = 630;
-const colors = { bg: '#141416', surface: '#1c1c1f', text: '#ececee', muted: '#9a9aa2', accent: '#8aa6ff', border: '#2c2c31' };
-const latin = "'Segoe UI', 'Helvetica Neue', Arial, sans-serif";
+const c = { bg: '#f6f2ea', card: '#fcfaf5', text: '#1f1b16', muted: '#6e6558', accent: '#0f6b62', border: '#e2d9c9', gold: '#e8bf73', note: '#8d5a0c' };
+const serif = "Newsreader, Georgia, 'Times New Roman', serif";
+const sans = "'Segoe UI', 'Helvetica Neue', Arial, sans-serif";
 const persian = "Vazirmatn, Tahoma, 'Segoe UI', sans-serif";
 
 const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
-	<rect width="${W}" height="${H}" fill="${colors.bg}"/>
-	<rect x="40" y="40" width="${W - 80}" height="${H - 80}" rx="28" fill="${colors.surface}" stroke="${colors.border}" stroke-width="2"/>
-	<rect x="96" y="120" width="72" height="8" rx="4" fill="${colors.accent}"/>
-	<text x="96" y="250" font-family="${latin}" font-size="96" font-weight="800" fill="${colors.text}">Our Takeaway</text>
-	<text x="${W - 96}" y="250" font-family="${persian}" font-size="64" font-weight="700" fill="${colors.muted}" text-anchor="end">برداشت ما</text>
-	<text x="96" y="350" font-family="${latin}" font-size="38" fill="${colors.muted}">What we learn in our sessions, written down</text>
-	<text x="96" y="400" font-family="${latin}" font-size="38" fill="${colors.muted}">in English and Persian.</text>
-	<text x="96" y="530" font-family="${latin}" font-size="32" font-weight="700" fill="${colors.accent}">our-takeaway.blog</text>
+	<rect width="${W}" height="${H}" fill="${c.bg}"/>
+	<rect x="40" y="40" width="${W - 80}" height="${H - 80}" rx="28" fill="${c.card}" stroke="${c.border}" stroke-width="2"/>
+	<g transform="translate(96 104) scale(2.4)">
+		<rect width="32" height="32" rx="9" fill="${c.accent}"/>
+		<path d="M9 11h14M9 16h14M9 21h8" stroke="${c.bg}" stroke-width="2.6" stroke-linecap="round"/>
+		<circle cx="23" cy="21" r="2.6" fill="${c.gold}"/>
+	</g>
+	<text x="${W - 96}" y="160" font-family="${persian}" font-size="44" font-weight="700" fill="${c.muted}" text-anchor="end">برداشت ما</text>
+	<text x="92" y="320" font-family="${serif}" font-size="112" font-weight="600" fill="${c.text}">Our Takeaway</text>
+	<text x="96" y="390" font-family="${serif}" font-size="38" fill="${c.muted}">What we learn in our sessions, written down</text>
+	<text x="96" y="438" font-family="${serif}" font-size="38" fill="${c.muted}">in English and Persian.</text>
+	<rect x="96" y="500" width="64" height="4" rx="2" fill="${c.accent}"/>
+	<text x="96" y="550" font-family="${sans}" font-size="28" font-weight="700" fill="${c.accent}" letter-spacing="1">our-takeaway.blog</text>
 </svg>`;
 
 await sharp(Buffer.from(svg)).png().toFile(fileURLToPath(new URL('../public/og.png', import.meta.url)));

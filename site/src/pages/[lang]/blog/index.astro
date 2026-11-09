@@ -19,7 +19,7 @@ const tags = [...new Set(posts.flatMap((p) => p.data.tags))].sort((a, b) =>
 	<h1>{t(lang, 'allPosts')}</h1>
 	{tags.length > 0 && (
 		<p class="tags">
-			{tags.map((tag) => <a class="tag" href={`/${lang}/tags/${encodeURIComponent(tagSlug(tag))}/`}>#{tag}</a>)}
+			{tags.map((tag) => <a class="tag" href={`/${lang}/tags/${encodeURIComponent(tagSlug(tag))}/`}>#<bdi>{tag}</bdi></a>)}
 		</p>
 	)}
 	<PostList lang={lang} posts={posts} />

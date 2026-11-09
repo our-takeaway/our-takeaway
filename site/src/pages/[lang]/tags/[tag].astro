@@ -26,6 +26,6 @@ const { label, posts } = Astro.props;
 ---
 
 <Base lang={lang} title={`#${label}`}>
-	<h1>#{label}</h1>
+	<h1>#<bdi>{label}</bdi></h1>
 	<PostList lang={lang} posts={posts} />
 </Base>
