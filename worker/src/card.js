@@ -192,6 +192,39 @@ function headline(post, url, st) {
 	}
 }
 
+// ---------- diagram (diagram.js) ----------
+
+const WITH_DIAGRAM = ['review', 'published', 'archived'];
+const firstLine = (s) => {
+	const line = String(s || '').split('\n').map((l) => l.trim()).filter(Boolean).join(' · ').replace(/: · /g, ': ');
+	return line.length > 260 ? `${line.slice(0, 257)}…` : line;
+};
+
+function diagramLine(post) {
+	if (!WITH_DIAGRAM.includes(post.status)) return null;
+	const d = post.diagram || {};
+	switch (post.diagram_status) {
+		case 'making': return '📊 Making the diagram… (about a minute)';
+		case 'ready': return `📊 <b>Diagram:</b> ${tg.esc(d.en?.caption || d.fa?.caption || 'ready')}` +
+			(d.error ? `\n⚠️ <i>The last try failed, the old one stays: ${tg.esc(firstLine(d.error))}</i>` : '');
+		case 'failed': return `📊 <b>The diagram failed:</b> ${tg.esc(firstLine(d.error))}`;
+		case 'no': return null;
+		default: return '📊 <b>Add a diagram?</b> Napkin can draw one picture for this post from a few words.';
+	}
+}
+
+function diagramButtons(post) {
+	if (!WITH_DIAGRAM.includes(post.status)) return [];
+	const id = post.id;
+	switch (post.diagram_status) {
+		case 'making': return [[b('⏳ Making the diagram…', `ref:${id}`)]];
+		case 'ready': return [[b('🖼 See diagram', `dgs:${id}`), b('🔁 New diagram', `dg:${id}`), b('🗑 Remove', `dgx:${id}`)]];
+		case 'failed': return [[b('🔁 Try the diagram again', `dg:${id}`), b('🚫 No diagram', `dgn:${id}`)]];
+		case 'no': return [];
+		default: return [[b('📊 Add a diagram', `dg:${id}`), b('🚫 No diagram', `dgn:${id}`)]];
+	}
+}
+
 const clock = (t) => new Date(t).toLocaleString('en-GB', { timeZone: process.env.TZ || 'Asia/Tehran', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
 
 export function renderText(post, st, extra) {
@@ -216,6 +249,7 @@ export function renderText(post, st, extra) {
 		'',
 		headline(post, url, st),
 		steps.publish.s === 'done' && steps.publish.info?.note ? `<i>${tg.esc(steps.publish.info.note)}</i>` : null,
+		diagramLine(post),
 		'',
 		`<i>${tg.esc(meta)}</i>`,
 		st.note ? `<i>${tg.esc(st.note.text)} · ${clock(st.note.at)}</i>` : null,
@@ -265,6 +299,7 @@ function mainButtons(post) {
 		default:
 			rows.push([b('🔄 Refresh', `ref:${id}`)]);
 	}
+	rows.push(...diagramButtons(post));
 	rows.push([
 		b('⚙️ Settings', `set:${id}`),
 		...(post.transcript ? [b('📜 Transcript', `tr:${id}`)] : []),
@@ -280,7 +315,7 @@ function settingsButtons(post) {
 	const lang = post.source_language ? LANG_NAME[post.source_language] : 'auto';
 	return [
 		[b('🗣 Speakers & notes', `spk:${id}`), b(`🌐 Language: ${lang}`, `lang:${id}`)],
-		[b('🤖 AI / speech model', `mdl:${id}`)],
+		[b('🤖 AI / speech model', `mdl:${id}`), ...(post.diagram_status === 'no' && WITH_DIAGRAM.includes(post.status) ? [b('📊 Add a diagram', `dg:${id}`)] : [])],
 		[b('🗑 Delete post', `del:${id}`)],
 		back(id),
 	];

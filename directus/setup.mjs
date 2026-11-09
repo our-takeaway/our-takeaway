@@ -81,6 +81,18 @@ const LLM_CHOICES = [
 ];
 const STT_CHOICES = ['elevenlabs:scribe_v2', 'whisper:whisper-large-v3', 'whisper:whisper-large-v3-turbo'];
 const DEFAULT_LLM = LLM_CHOICES[0];
+
+// Napkin AI styles offered for diagrams (same list as worker/src/diagram.js); any style id works.
+const DIAGRAM_STYLES = [
+	['Amber Harvest', 'C5PP4SBJ5NM62WKPCNSQ8BBJ68'],
+	['Verdant Blend', 'CDQPRVVJCSTPRBB7E9GP8TB5DST2TWHJ'],
+	['Deep Teal', 'CSQQ4VB1DGPK8BB3DXP6YWHDE8S0'],
+	['Boardroom Calm', 'CSQQ4VB1DGPPTVVEDXHPGWKFDNJJTSKCC5T2TWHJ'],
+	['Quiet Accent', 'CSQQ4VB1DGPPRTB7D1T2TWHJ'],
+	['Pure Outline', 'CSQQ4VB1DGPP4V31CDNJTVKFBXK6JV3C5NS34'],
+	['Hand-Tinted', 'D1GPWS1DCDQPRVVJCSTPRBBJ68'],
+	['Soft Spectrum', 'CDQPRVVJCSTPRBBKDXK78BBJ68'],
+];
 const DEFAULT_STT = STT_CHOICES[0];
 
 // ---------- the posts collection ----------
@@ -108,6 +120,13 @@ const STAGE_CHOICES = options([
 	['translate', 'Translation'],
 	['publish', 'Publishing'],
 	['remove', 'Removing from site'],
+]);
+
+const DIAGRAM_STATUS = choices([
+	['no', 'No diagram', '#737373'],
+	['making', 'Making…', '#3399FF'],
+	['ready', 'Ready (shown on the site)', '#00C897'],
+	['failed', 'Failed', '#E35169'],
 ]);
 
 const postFields = [
@@ -231,6 +250,19 @@ const postFields = [
 	field('x_url', 'string', { interface: 'input', readonly: true, group: 'social_group', width: 'half', note: 'Set after posting; clear it to post again.' }),
 	field('reddit_url', 'string', { interface: 'input', readonly: true, group: 'social_group', width: 'half', note: 'Set after posting; clear it to post again.' }),
 
+	group('diagram_group', '5 · Diagram (Napkin AI)'),
+	field('diagram_status', 'string', {
+		interface: 'select-dropdown', group: 'diagram_group', width: 'half',
+		display: 'labels', display_options: { showAsDot: true, choices: DIAGRAM_STATUS },
+		options: { choices: DIAGRAM_STATUS, allowNone: true, placeholder: 'Not decided (Telegram asks at review)' },
+		note: 'Diagrams are made from Telegram (📊 on the post\'s card). Set to "No diagram" to hide it on the site.',
+	}),
+	field('diagram', 'json', {
+		interface: 'input-code', special: ['cast-json'], readonly: true, group: 'diagram_group',
+		options: { language: 'JSON' },
+		note: 'Per language: the image file, the section it follows (after), alt text, caption and the words sent to Napkin.',
+	}),
+
 	field('published_at', 'timestamp', { interface: 'datetime', readonly: true, width: 'half' }),
 	field('date_created', 'timestamp', { special: ['date-created'], interface: 'datetime', readonly: true, hidden: true, width: 'half' }),
 	field('date_updated', 'timestamp', { special: ['date-updated'], interface: 'datetime', readonly: true, hidden: true, width: 'half' }),
@@ -302,6 +334,20 @@ const settingsFields = [
 		options: { choices: [{ text: 'Link post', value: 'link' }, { text: 'Text post', value: 'self' }] },
 	}, { default_value: 'link' }),
 	field('reddit_subreddit', 'string', { interface: 'input', group: 'social_settings_group', width: 'half', note: 'Where Reddit posts go, e.g. u_yourname (your profile) or a subreddit name.' }),
+
+	group('diagram_settings_group', 'Diagrams (Napkin AI)'),
+	field('diagram_style', 'string', {
+		interface: 'select-dropdown', group: 'diagram_settings_group', width: 'half',
+		options: { choices: options(DIAGRAM_STYLES.map(([name, id]) => [id, name])), allowOther: true },
+		translations: [{ language: 'en-US', translation: 'Diagram style' }],
+		note: 'A Napkin style id (built-in or your own from app.napkin.ai). See api.napkin.ai/docs/styles.',
+	}, { default_value: DIAGRAM_STYLES[0][1] }),
+	field('diagram_words', 'integer', {
+		interface: 'input', group: 'diagram_settings_group', width: 'half',
+		options: { min: 20, max: 200 },
+		translations: [{ language: 'en-US', translation: 'Words per diagram' }],
+		note: 'Most words sent to Napkin per post, both languages together. Napkin credits go by the words: 70 ≈ 500 credits a week for one post a day.',
+	}, { default_value: 70 }),
 ];
 
 // ---------- apply ----------
@@ -380,6 +426,8 @@ async function ensureSettings(oldProvider) {
 	if (!s.stt_choices?.length) patch.stt_choices = STT_CHOICES;
 	if (!s.social_language) patch.social_language = 'en';
 	if (!s.reddit_kind) patch.reddit_kind = 'link';
+	if (!s.diagram_style) patch.diagram_style = DIAGRAM_STYLES[0][1];
+	if (!s.diagram_words) patch.diagram_words = 70;
 	if (Object.keys(patch).length) {
 		await api('PATCH', '/items/writer_settings', patch);
 		console.log(`writer_settings: set ${Object.keys(patch).join(', ')}`);

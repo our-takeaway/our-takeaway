@@ -125,6 +125,11 @@ services:
       TRANSCRIBE_MODEL: ${TRANSCRIBE_MODEL:-whisper-large-v3}
       # which Telegram message is each post's live card
       BOT_STATE_FILE: /data/telegram-cards.json
+      # diagrams: the AI plans them, Napkin draws them (keys tried in order)
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      NAPKIN_API_KEY_1: ${NAPKIN_API_KEY_1:-}
+      NAPKIN_API_KEY_2: ${NAPKIN_API_KEY_2:-}
+      NAPKIN_API_KEY_3: ${NAPKIN_API_KEY_3:-}
     volumes:
       - www:/www
       - bot_data:/data

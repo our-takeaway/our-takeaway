@@ -32,6 +32,10 @@ export async function buildSite() {
 	return { release: name, posts: posts ? Number(posts) : null };
 }
 
+// One build at a time; a request that arrives mid-build waits for the next one.
+let building = Promise.resolve();
+export const queueBuild = () => (building = building.catch(() => {}).then(buildSite));
+
 export async function hasLiveSite() {
 	return fs
 		.stat(path.join(WWW_DIR, 'current', 'index.html'))

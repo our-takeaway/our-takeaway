@@ -70,6 +70,28 @@ export async function sendDocument(filename, content, { caption, buttons, chatId
 	return sent;
 }
 
+export async function sendPhoto(buffer, filename, { caption, chatId } = {}) {
+	if (!enabled() && !chatId) return [];
+	const sent = [];
+	for (const chat of chatId ? [chatId] : chats()) {
+		const form = new FormData();
+		form.append('chat_id', String(chat));
+		if (caption) {
+			form.append('caption', caption.slice(0, 1000));
+			form.append('parse_mode', 'HTML');
+		}
+		form.append('photo', new Blob([buffer], { type: 'image/png' }), filename);
+		try {
+			sent.push(await call('sendPhoto', null, form));
+		} catch (e) {
+			// very tall images are refused as photos; send them as a file instead
+			console.error('telegram photo:', e.message);
+			sent.push(...(await sendDocument(filename, buffer, { caption, chatId: chat })));
+		}
+	}
+	return sent;
+}
+
 // Long text: send the start as a message and the whole thing as a file.
 export async function sendLong(header, body, filename, opts = {}) {
 	if (header.length + body.length <= MAX_TEXT) return sendText(`${header}\n\n${body}`, opts);

@@ -1,7 +1,9 @@
 import path from 'node:path';
 import { cardMessageOf, lastSpeakers, onDeleted, rememberSpeakers, showCard, speakersOf, voicesOf } from './card.js';
 import { cmsSettingsLink, createPost, deletePost, getPost, getSettings, listPosts, updatePost, updateSettings, uploadFile } from './directus.js';
+import { DEFAULT_DIAGRAM_WORDS, DIAGRAM_STYLES, makeDiagram, removeDiagram, sendDiagram, styleName } from './diagram.js';
 import { draftFile, draftFilename, LANG_NAME, parseDraftFile, parseDraftFilename } from './drafts.js';
+import { napkinKeys } from './napkin.js';
 import * as tg from './telegram.js';
 import { isTranscriptFile } from './textfile.js';
 
@@ -141,6 +143,7 @@ function settingsText(s) {
 		`🎙 Speech-to-text: <code>${tg.esc(s.stt_model || DEFAULT_STT_CHOICES[0])}</code>`,
 		`🔤 Names and terms: ${terms.length ? tg.esc(terms.join(', ')) : 'none'}`,
 		`📣 Social posts in: ${LANG_NAME[s.social_language || 'en']}`,
+		`📊 Diagrams: ${tg.esc(styleName(s.diagram_style || DIAGRAM_STYLES[0][1]))} · at most ${s.diagram_words || DEFAULT_DIAGRAM_WORDS} words a post · ${napkinKeys().length} Napkin key(s)`,
 		'',
 		'<i>📄 sends a prompt as a file: edit it and send it back as a reply to replace it.</i>',
 	].join('\n');
@@ -151,6 +154,7 @@ function settingsButtons(s) {
 		[b('🤖 AI model', 'g:llm'), b('🎙 Speech model', 'g:stt')],
 		[b(`🧠 Effort: ${s.reasoning_effort || 'low'}`, 'g:eff'), b(`📣 Social: ${LANG_NAME[s.social_language || 'en']}`, 'g:soc')],
 		[b('🔤 Names & terms', 'g:kt')],
+		[b('📊 Diagram style', 'g:dst'), b(`📊 Words: ${s.diagram_words || DEFAULT_DIAGRAM_WORDS}`, 'g:dw')],
 		[b('📄 Writing prompt', 'g:pw'), b('📄 Translation prompt', 'g:pt')],
 		[{ text: '🔗 Open in CMS', url: cmsSettingsLink() }],
 	];
@@ -195,6 +199,17 @@ async function onGlobal(q, sub, arg) {
 		case 'kt':
 			await say(chatId, ASK.keyterms(Array.isArray(s.keyterms) ? s.keyterms : []), { forceReply: true });
 			return tg.answerCallback(q.id);
+		case 'dst': {
+			const cur = s.diagram_style || DIAGRAM_STYLES[0][1];
+			if (arg === undefined) return pick('Napkin style for diagrams', DIAGRAM_STYLES.map(([name, sid], i) => [b(`${mark(sid, cur)}${name}`, `g:dst:${i}`)]));
+			const chosen = DIAGRAM_STYLES[Number(arg)];
+			return chosen ? menu({ diagram_style: chosen[1] }, `Style: ${chosen[0]}`) : menu();
+		}
+		case 'dw': {
+			const cur = Number(s.diagram_words) || DEFAULT_DIAGRAM_WORDS;
+			if (!arg) return pick('Most words sent to Napkin per post (both languages together). Napkin credits go by the words.', [[70, 100, 150, 200].map((n) => b(`${mark(n, cur)}${n}`, `g:dw:${n}`))]);
+			return menu({ diagram_words: Number(arg) }, `${arg} words a post`);
+		}
 		case 'pw':
 		case 'pt': {
 			const [file, field] = sub === 'pw' ? ['writing-prompt.md', 'system_prompt'] : ['translation-prompt.md', 'translation_prompt'];
@@ -312,6 +327,21 @@ async function onButton(q) {
 			await nameSpeakers(id, names, who);
 			return tg.answerCallback(q.id, 'Writing…');
 		}
+		case 'dg':
+			if (post.diagram_status === 'making') return tg.answerCallback(q.id, 'Already making it…');
+			if (!napkinKeys().length) return tg.answerCallback(q.id, 'No Napkin API key on the server (NAPKIN_API_KEY_1).');
+			tg.answerCallback(q.id, 'Making the diagram…');
+			return makeDiagram(id, who);
+		case 'dgn':
+			await updatePost(id, { diagram_status: 'no' });
+			return card({ note: `🚫 No diagram for this post (${who})` }, 'No diagram');
+		case 'dgs':
+			if (!post.diagram?.fa?.file && !post.diagram?.en?.file) return tg.answerCallback(q.id, 'There is no diagram yet.');
+			tg.answerCallback(q.id, 'Sending…');
+			return sendDiagram(id, chatId);
+		case 'dgx':
+			tg.answerCallback(q.id, 'Removing…');
+			return removeDiagram(id, who);
 		case 'set':
 			return card({ view: 'settings' });
 		case 'lang':

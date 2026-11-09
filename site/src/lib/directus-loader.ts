@@ -27,6 +27,60 @@ async function fromDirectus(url: string, token: string): Promise<Row[]> {
 	return (await res.json()).data;
 }
 
+// ---------- diagrams (made by the worker with Napkin AI, see worker/src/diagram.js) ----------
+
+const DIAGRAM_DIR = path.resolve('public/diagrams');
+const escHtml = (s: string) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+// Copy the image from Directus into public/diagrams once; the site serves it from there.
+async function diagramSrc(url: string, token: string, fileId: string) {
+	const name = `${String(fileId).replace(/[^\w-]/g, '')}.png`;
+	const target = path.join(DIAGRAM_DIR, name);
+	const have = await fs.stat(target).then(() => true, () => false);
+	if (!have) {
+		const res = await fetch(`${url.replace(/\/$/, '')}/assets/${encodeURIComponent(fileId)}`, {
+			headers: token ? { Authorization: `Bearer ${token}` } : {},
+		});
+		if (!res.ok) throw new Error(`diagram ${fileId}: Directus answered ${res.status}`);
+		await fs.mkdir(DIAGRAM_DIR, { recursive: true });
+		await fs.writeFile(target, Buffer.from(await res.arrayBuffer()));
+	}
+	return `/diagrams/${name}`;
+}
+
+// Put the figure at the end of the section whose heading is `after` (or after the opening).
+export function placeDiagram(body: string, figure: string, after = '') {
+	const lines = body.split('\n');
+	const isH2 = (l: string) => /^##\s+/.test(l);
+	const norm = (s: string) => s.replace(/^#+\s*/, '').replace(/[*_`"«»“”]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+	let at = -1;
+	if (after.trim()) {
+		const want = norm(after);
+		let i = lines.findIndex((l) => isH2(l) && norm(l) === want);
+		if (i < 0) i = lines.findIndex((l) => isH2(l) && (norm(l).includes(want) || want.includes(norm(l))));
+		if (i >= 0) {
+			const next = lines.findIndex((l, j) => j > i && isH2(l));
+			at = next >= 0 ? next : lines.length;
+		}
+	}
+	if (at < 0) {
+		const first = lines.findIndex(isH2);
+		at = first >= 0 ? first : lines.length;
+	}
+	lines.splice(at, 0, '', figure, '');
+	return lines.join('\n');
+}
+
+function diagramFigure(src: string, d: Row) {
+	const size = d.width && d.height ? ` width="${Number(d.width)}" height="${Number(d.height)}"` : '';
+	return [
+		'<figure class="diagram">',
+		`<a href="${src}" target="_blank" rel="noopener"><img src="${src}" alt="${escHtml(d.alt)}"${size} loading="lazy" decoding="async"></a>`,
+		d.caption ? `<figcaption>${escHtml(d.caption)}</figcaption>` : '',
+		'</figure>',
+	].filter(Boolean).join('\n');
+}
+
 function parseFrontmatter(text: string) {
 	// \r?: Windows checkouts can turn the sample files into CRLF
 	const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
@@ -94,8 +148,17 @@ export function directusLoader(): Loader {
 				// the language the session was in: the post was written in it, then translated
 				const sourceLang = [row.source_language, row.detected_language].find((l) => LANGS.includes(l));
 				for (const lang of LANGS) {
-					const body = row[`body_${lang}`];
+					let body = row[`body_${lang}`];
 					if (!body?.trim() || !row[`title_${lang}`]) continue;
+					const diagram = row.diagram_status === 'ready' ? row.diagram?.[lang] : null;
+					if (diagram?.file && url) {
+						try {
+							const src = await diagramSrc(url, process.env.DIRECTUS_TOKEN ?? '', diagram.file);
+							body = placeDiagram(body, diagramFigure(src, diagram), diagram.after);
+						} catch (e) {
+							logger.warn(`post ${row.slug}: diagram skipped (${(e as Error).message})`);
+						}
+					}
 					const id = `${lang}/${row.slug}`;
 					const data = await parseData({
 						id,

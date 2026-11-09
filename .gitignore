@@ -5,3 +5,4 @@ www/
 .env
 .DS_Store
 .test-stack/
+site/public/diagrams/

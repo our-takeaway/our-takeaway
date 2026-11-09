@@ -1,7 +1,8 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
 import { handleUpdate } from './bot.js';
-import { buildSite, hasLiveSite } from './build.js';
+import { hasLiveSite, queueBuild } from './build.js';
+import { makeDiagram } from './diagram.js';
 import { reportStage } from './stages.js';
 import * as tg from './telegram.js';
 import { transcribePost } from './transcribe.js';
@@ -10,6 +11,7 @@ import { transcribePost } from './transcribe.js';
 //   POST /build       rebuild the static site from Directus             → { release, posts }
 //   POST /transcribe  { postId }  file / recording / link → transcript  → { text, language, model, seconds, chars }
 //   POST /stage       { postId, stage, state, info?, error? }  progress log + status + Telegram
+//   POST /diagram     { postId }  make the post's Napkin diagram (runs in the background) → { started }
 // Called by Telegram (secret header, through Caddy at https://<CMS_DOMAIN>/telegram/webhook):
 //   POST /telegram/webhook
 
@@ -22,9 +24,6 @@ if (!SECRET) {
 // Telegram sends this back in a header so we know the request really came from it.
 const TELEGRAM_SECRET = createHash('sha256').update(`telegram:${SECRET}`).digest('hex').slice(0, 64);
 
-// One build at a time; a request that arrives mid-build waits for the next one.
-let building = Promise.resolve();
-const queueBuild = () => (building = building.catch(() => {}).then(buildSite));
 
 const same = (a, b) => {
 	const x = Buffer.from(a || '');
@@ -51,6 +50,11 @@ const need = (obj, key) => {
 const routes = {
 	'POST /build': async () => queueBuild(),
 	'POST /transcribe': async (req) => transcribePost(need(await readJson(req), 'postId')),
+	'POST /diagram': async (req) => {
+		const postId = need(await readJson(req), 'postId');
+		makeDiagram(postId, 'the CMS');
+		return { started: true };
+	},
 	'POST /stage': async (req) => {
 		const body = await readJson(req);
 		need(body, 'postId');

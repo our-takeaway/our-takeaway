@@ -569,6 +569,55 @@ html[lang='fa'] .prose strong {
 	height: auto;
 	border-radius: var(--radius);
 }
+/* diagrams (Napkin AI): a light card, also in dark mode, since the drawings are light */
+.prose figure.diagram {
+	margin: 2.4em 0;
+}
+.prose figure.diagram a {
+	display: block;
+	padding: 14px;
+	background: #fffdf8;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow);
+	text-decoration: none;
+	transition: transform 0.2s, box-shadow 0.2s;
+}
+.prose figure.diagram a:hover {
+	transform: translateY(-2px);
+	box-shadow: 0 2px 4px rgb(60 45 20 / 8%), 0 16px 32px -14px rgb(60 45 20 / 28%);
+}
+.prose figure.diagram img {
+	display: block;
+	width: 100%;
+	height: auto;
+	border-radius: 8px;
+}
+.prose figure.diagram figcaption {
+	margin-top: 12px;
+	text-align: center;
+	font-family: var(--font-ui);
+	font-size: 0.85rem;
+	line-height: 1.6;
+	color: var(--muted);
+}
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme='light']) .prose figure.diagram a {
+		background: #ece6dc;
+		border-color: transparent;
+	}
+	:root:not([data-theme='light']) .prose figure.diagram img {
+		filter: brightness(0.94);
+	}
+}
+:root[data-theme='dark'] .prose figure.diagram a {
+	background: #ece6dc;
+	border-color: transparent;
+}
+:root[data-theme='dark'] .prose figure.diagram img {
+	filter: brightness(0.94);
+}
+
 /* pull quotes: "> words" then "> — Name" */
 .prose blockquote {
 	margin: 1.8em 0;

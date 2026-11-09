@@ -26,6 +26,8 @@ export const deletePost = (id) => directus('DELETE', `/items/posts/${encodeURICo
 export const listPosts = (offset = 0, limit = 10) =>
 	directus('GET', `/items/posts?fields=id,status,title,title_fa,title_en&sort=-date_created&limit=${limit}&offset=${offset}`);
 
+export const deleteFile = (id) => directus('DELETE', `/files/${encodeURIComponent(id)}`);
+
 export async function fileInfo(id) {
 	return directus('GET', `/files/${encodeURIComponent(id)}?fields=id,filename_download,type,filesize`);
 }
