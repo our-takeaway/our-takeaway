@@ -3,6 +3,7 @@ import { showCard } from './card.js';
 import { deleteFile, downloadFile, getPost, getSettings, updatePost, uploadFile } from './directus.js';
 import { LANG_NAME } from './drafts.js';
 import { generateVisual, napkinKeys } from './napkin.js';
+import { defaultPrompt, fill } from './prompts.js';
 import * as tg from './telegram.js';
 
 // One diagram per post, drawn by Napkin AI, in each language the post has.
@@ -25,40 +26,38 @@ export const DIAGRAM_STYLES = [
 	['Hand-Tinted', 'D1GPWS1DCDQPRVVJCSTPRBBJ68'],
 	['Soft Spectrum', 'CDQPRVVJCSTPRBBKDXK78BBJ68'],
 ];
-export const DEFAULT_DIAGRAM_WORDS = 70; // ~500 Napkin credits a week / 7 posts
+// Words sent to Napkin for the whole post (both languages together); each language gets half.
+// 120–300 → 60–150 words per diagram: room for precise details, credits still in check.
+export const DEFAULT_DIAGRAM_WORDS = 300;
+export const DEFAULT_DIAGRAM_MIN_WORDS = 120;
+export const BLOG_LANGS = 2;
 export const styleName = (id) => DIAGRAM_STYLES.find(([, s]) => s === id)?.[0] || id;
+
+/** The words-per-language range from Writer Settings (totals per post ÷ 2). */
+export function wordRange(s = {}) {
+	const max = Math.min(400, Math.max(60, Number(s.diagram_words) || DEFAULT_DIAGRAM_WORDS));
+	const min = Math.min(max, Math.max(20, Number(s.diagram_words_min) || DEFAULT_DIAGRAM_MIN_WORDS));
+	return { min: Math.floor(min / BLOG_LANGS), max: Math.floor(max / BLOG_LANGS), totalMin: min, totalMax: max };
+}
 
 const LAYOUTS = ['flowchart', 'timeline', 'comparison', 'cycle', 'mindmap', 'hierarchy', 'list'];
 const LANG_TAG = { fa: 'fa-IR', en: 'en-US' };
 const words = (s) => String(s || '').trim().split(/\s+/).filter(Boolean).length;
 const langsOf = (post) => ['fa', 'en'].filter((l) => post[`body_${l}`]?.trim());
 
-const PLAN_PROMPT = (limit, langs) => `You plan one diagram for a post on "Our Takeaway", a blog of session notes in Persian and English. Napkin AI draws it from the few words you write. Every word costs credits, so write as few words as you can while keeping the diagram exact and worth looking at.
+// The planning prompt is Writer Settings → Diagram prompt (default: directus/prompts/diagram.md).
+// Placeholders: {{min}} {{max}} {{target}} {{languages}} {{layouts}}.
+function planPrompt(template, { min, max }, langs) {
+	return fill(template, {
+		min,
+		max,
+		target: Math.round((min + max) / 2),
+		languages: langs.map((l) => LANG_NAME[l]).join(' and '),
+		layouts: LAYOUTS.join(', '),
+	});
+}
 
-1. Pick the one idea in the post that a picture explains best: a process or path, steps over time, a comparison of options, a cycle, a structure, a before/after. Not a summary of the whole post.
-2. Write it as short lines: a title line first, then one item per line; labels of 1–5 words, with an optional short detail after a colon. Example:
-   From cards to sentences
-   Week 1: pick picture cards
-   Week 2: type learned letters
-   Week 3: fill one missing word
-3. Hard limit: at most ${limit} words per language, title included. Fewer is better.
-4. Use only what the post says. The same items in the same order in ${langs.map((l) => LANG_NAME[l]).join(' and ')}. Persian: natural, with half-spaces (ZWNJ); keep technical terms in English where the post does.
-5. layout: the kind of visual — ${LAYOUTS.join(', ')}.
-6. Placement, per language: after_heading is the exact text (without "##") of the heading whose section the diagram illustrates; it goes at the end of that section. Use "" to put it right after the opening, as an overview. Never the takeaways or open-questions heading.
-7. alt: one plain sentence saying what the diagram shows, for screen readers. caption: at most 10 words.
-No markdown, no emojis, no numbering unless the post numbers the steps.`;
-
-async function planDiagram(post, model, limit) {
-	const langs = langsOf(post);
-	const str = { type: 'string' };
-	const version = { type: 'object', properties: { content: str, after_heading: str, alt: str, caption: str }, required: ['content', 'after_heading', 'alt', 'caption'], additionalProperties: false };
-	const schema = {
-		type: 'object',
-		properties: { layout: { type: 'string', enum: LAYOUTS }, ...Object.fromEntries(langs.map((l) => [l, version])) },
-		required: ['layout', ...langs],
-		additionalProperties: false,
-	};
-	const posts = langs.map((l) => `<post lang="${l}">\n# ${post[`title_${l}`] || ''}\n\n${post[`body_${l}`]}\n</post>`).join('\n\n');
+async function askAI(model, messages, schema) {
 	const key = process.env.OPENROUTER_API_KEY;
 	if (!key) throw new Error('OPENROUTER_API_KEY is not set for the worker.');
 	const res = await fetch(`${(process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '')}/chat/completions`, {
@@ -68,24 +67,63 @@ async function planDiagram(post, model, limit) {
 			model,
 			max_tokens: 8000,
 			reasoning: { effort: 'low' },
-			messages: [{ role: 'system', content: PLAN_PROMPT(limit, langs) }, { role: 'user', content: posts }],
+			messages,
 			response_format: { type: 'json_schema', json_schema: { name: 'diagram', strict: true, schema } },
 		}),
 		signal: AbortSignal.timeout(180_000),
 	});
 	const json = await res.json().catch(() => ({}));
 	if (!res.ok) throw new Error(`The AI model ${model} failed to plan the diagram (${res.status}): ${json.error?.message || JSON.stringify(json).slice(0, 300)}`);
+	const text = json.choices?.[0]?.message?.content;
 	try {
-		return { langs, plan: JSON.parse(json.choices?.[0]?.message?.content) };
+		return { plan: JSON.parse(text), text };
 	} catch {
 		throw new Error(`The AI model ${model} did not return a valid diagram plan.`);
 	}
 }
 
-// Keep the text within the word budget: drop items from the end, never the title.
-function fit(content, limit) {
+async function planDiagram(post, model, { min, max }, template) {
+	const langs = langsOf(post);
+	const str = { type: 'string' };
+	const version = {
+		type: 'object',
+		properties: { content: str, after_heading: str, position: { type: 'string', enum: ['start', 'end'] }, alt: str, caption: str },
+		required: ['content', 'after_heading', 'position', 'alt', 'caption'],
+		additionalProperties: false,
+	};
+	const schema = {
+		type: 'object',
+		properties: { layout: { type: 'string', enum: LAYOUTS }, ...Object.fromEntries(langs.map((l) => [l, version])) },
+		required: ['layout', ...langs],
+		additionalProperties: false,
+	};
+	const posts = langs.map((l) => `<post lang="${l}">\n# ${post[`title_${l}`] || ''}\n\n${post[`body_${l}`]}\n</post>`).join('\n\n');
+	const messages = [{ role: 'system', content: planPrompt(template, { min, max }, langs) }, { role: 'user', content: posts }];
+	let { plan, text } = await askAI(model, messages, schema);
+
+	// Too thin? Ask once for the missing detail (never padding); too long is trimmed later.
+	const short = langs.filter((l) => words(plan[l]?.content) < min);
+	if (short.length) {
+		const counts = langs.map((l) => `${LANG_NAME[l]}: ${words(plan[l].content)} words`).join(', ');
+		messages.push({ role: 'assistant', content: text }, {
+			role: 'user',
+			content: `The diagram text is too short (${counts}). Rewrite it with between ${min} and ${max} words per language: ` +
+				'make each item\'s detail more precise with what the post actually says (what, how, why, numbers, names), or add an item the idea needs. ' +
+				'No filler. Keep the same idea, layout and placement.',
+		});
+		({ plan } = await askAI(model, messages, schema));
+	}
+	return { langs, plan };
+}
+
+// Keep the text within the word budget: drop items from the end, but never the title
+// or a closing "Decision:" / "Result:" line.
+export function fit(content, limit) {
 	const lines = String(content).split('\n').map((l) => l.trim()).filter(Boolean);
-	while (lines.length > 2 && words(lines.join(' ')) > limit) lines.pop();
+	const outcome = /^(decision|result|تصمیم|نتیجه)\s*[:：]/i.test(lines.at(-1) || '') ? lines.pop() : null;
+	const total = () => words([...lines, outcome].filter(Boolean).join(' '));
+	while (lines.length > 2 && total() > limit) lines.pop();
+	if (outcome) lines.push(outcome);
 	const text = lines.join('\n');
 	return words(text) > limit ? text.split(/\s+/).slice(0, limit).join(' ') : text;
 }
@@ -103,10 +141,11 @@ export async function makeDiagram(id, who = 'someone') {
 		await showCard(id, { note: `📊 Making a diagram… (${who})` });
 
 		const [post, s] = await Promise.all([getPost(id), getSettings()]);
-		const budget = Math.min(200, Math.max(20, Number(s.diagram_words) || DEFAULT_DIAGRAM_WORDS));
+		const range = wordRange(s);
 		const style = s.diagram_style || DIAGRAM_STYLES[0][1];
-		const { langs, plan } = await planDiagram(post, post.llm_model || s.model, Math.floor(budget / Math.max(1, langsOf(post).length)));
-		const limit = Math.floor(budget / langs.length);
+		const template = s.diagram_prompt?.trim() || defaultPrompt('diagram_prompt');
+		const { langs, plan } = await planDiagram(post, post.llm_model || s.model, range, template);
+		const limit = range.max;
 
 		const result = { layout: plan.layout, style, at: new Date().toISOString() };
 		for (const lang of langs) {
@@ -125,7 +164,11 @@ export async function makeDiagram(id, who = 'someone') {
 				transparent_background: false,
 			});
 			const file = await uploadFile(`post-${id}-diagram.${lang}.png`, drawn.buffer, 'image/png', `Diagram #${id} (${LANG_NAME[lang]})`);
-			result[lang] = { file, width: drawn.width, height: drawn.height, after: v.after_heading.trim(), alt: v.alt.trim(), caption: v.caption.trim(), text: content, words: words(content), key: drawn.key };
+			result[lang] = {
+				file, width: drawn.width, height: drawn.height,
+				after: v.after_heading.trim(), position: v.position === 'end' ? 'end' : 'start',
+				alt: v.alt.trim(), caption: v.caption.trim(), text: content, words: words(content), key: drawn.key,
+			};
 		}
 
 		await updatePost(id, { diagram: result, diagram_status: 'ready' });
@@ -159,7 +202,8 @@ export async function sendDiagram(id, chatId) {
 	for (const lang of ['fa', 'en']) {
 		const d = post.diagram?.[lang];
 		if (!d?.file) continue;
-		const caption = `📊 <b>#${id}</b> ${LANG_NAME[lang]} · ${tg.esc(d.caption || '')}\n<i>After: ${tg.esc(d.after || 'the opening')} · ${d.words} words</i>`;
+		const where = d.after ? `Placed at the ${d.position === 'end' ? 'end' : 'start'} of “${d.after}”` : 'Placed after the opening';
+		const caption = `📊 <b>#${id}</b> ${LANG_NAME[lang]} · ${tg.esc(d.caption || '')}\n<i>${tg.esc(where)} · ${d.words} words</i>`;
 		await tg.sendPhoto(await downloadFile(d.file), `post-${id}-diagram.${lang}.png`, { chatId, caption });
 	}
 }

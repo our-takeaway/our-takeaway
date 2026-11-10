@@ -17,8 +17,10 @@ WORKDIR /app/worker
 COPY worker/package.json worker/package-lock.json ./
 RUN npm ci --omit=dev
 COPY worker/ ./
+# default prompts, to reset Writer Settings to (Telegram /settings)
+COPY directus/prompts/ /app/prompts/
 
-ENV SITE_DIR=/app/site WWW_DIR=/www PORT=4000
+ENV SITE_DIR=/app/site WWW_DIR=/www PROMPTS_DIR=/app/prompts PORT=4000
 EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s CMD curl -fs http://localhost:4000/healthz || exit 1
 CMD ["node", "src/server.js"]

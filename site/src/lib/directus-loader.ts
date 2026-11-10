@@ -48,8 +48,9 @@ async function diagramSrc(url: string, token: string, fileId: string) {
 	return `/diagrams/${name}`;
 }
 
-// Put the figure at the end of the section whose heading is `after` (or after the opening).
-export function placeDiagram(body: string, figure: string, after = '') {
+// Put the figure in the section whose heading is `after`: right after its first paragraph
+// (position "start") or at its end ("end"). No heading, or one that isn't found: after the opening.
+export function placeDiagram(body: string, figure: string, after = '', position = 'end') {
 	const lines = body.split('\n');
 	const isH2 = (l: string) => /^##\s+/.test(l);
 	const norm = (s: string) => s.replace(/^#+\s*/, '').replace(/[*_`"«»“”]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -60,7 +61,16 @@ export function placeDiagram(body: string, figure: string, after = '') {
 		if (i < 0) i = lines.findIndex((l) => isH2(l) && (norm(l).includes(want) || want.includes(norm(l))));
 		if (i >= 0) {
 			const next = lines.findIndex((l, j) => j > i && isH2(l));
-			at = next >= 0 ? next : lines.length;
+			const end = next >= 0 ? next : lines.length;
+			at = end;
+			if (position === 'start') {
+				// the first block of text after the heading, then the blank line that ends it
+				const first = lines.findIndex((l, j) => j > i && j < end && l.trim());
+				if (first >= 0) {
+					const blank = lines.findIndex((l, j) => j > first && j < end && !l.trim());
+					at = blank >= 0 ? blank : end;
+				}
+			}
 		}
 	}
 	if (at < 0) {
@@ -154,7 +164,7 @@ export function directusLoader(): Loader {
 					if (diagram?.file && url) {
 						try {
 							const src = await diagramSrc(url, process.env.DIRECTUS_TOKEN ?? '', diagram.file);
-							body = placeDiagram(body, diagramFigure(src, diagram), diagram.after);
+							body = placeDiagram(body, diagramFigure(src, diagram), diagram.after, diagram.position);
 						} catch (e) {
 							logger.warn(`post ${row.slug}: diagram skipped (${(e as Error).message})`);
 						}

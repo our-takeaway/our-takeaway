@@ -1,9 +1,10 @@
 import path from 'node:path';
 import { cardMessageOf, lastSpeakers, onDeleted, rememberSpeakers, showCard, speakersOf, voicesOf } from './card.js';
 import { cmsSettingsLink, createPost, deletePost, getPost, getSettings, listPosts, updatePost, updateSettings, uploadFile } from './directus.js';
-import { DEFAULT_DIAGRAM_WORDS, DIAGRAM_STYLES, makeDiagram, removeDiagram, sendDiagram, styleName } from './diagram.js';
+import { DIAGRAM_STYLES, makeDiagram, removeDiagram, sendDiagram, styleName, wordRange } from './diagram.js';
 import { draftFile, draftFilename, LANG_NAME, parseDraftFile, parseDraftFilename } from './drafts.js';
 import { napkinKeys } from './napkin.js';
+import { DIAGRAM_PLACEHOLDERS, defaultPrompt, PROMPTS } from './prompts.js';
 import * as tg from './telegram.js';
 import { isTranscriptFile } from './textfile.js';
 
@@ -31,7 +32,9 @@ export const DEFAULT_LLM_CHOICES = [
 ];
 export const DEFAULT_STT_CHOICES = ['elevenlabs:scribe_v2', 'whisper:whisper-large-v3', 'whisper:whisper-large-v3-turbo'];
 
-const PROMPT_FILES = { 'writing-prompt.md': 'system_prompt', 'translation-prompt.md': 'translation_prompt' };
+// file name in Telegram → Writer Settings field (writing-prompt.md → system_prompt, …)
+const PROMPT_FILES = Object.fromEntries(Object.entries(PROMPTS).map(([field, p]) => [p.download, field]));
+const PROMPT_BUTTON = { pw: 'system_prompt', pt: 'translation_prompt', pd: 'diagram_prompt' };
 const STATUS_ICON = {
 	new: '🆕', transcribing: '⏳', speakers: '🗣', writing: '⏳', translating: '⏳', revise: '🔁', retry: '🔁',
 	review: '👀', approved: '🚀', publishing: '🚀', published: '🟢', archived: '🙈', error: '❌',
@@ -143,7 +146,7 @@ function settingsText(s) {
 		`🎙 Speech-to-text: <code>${tg.esc(s.stt_model || DEFAULT_STT_CHOICES[0])}</code>`,
 		`🔤 Names and terms: ${terms.length ? tg.esc(terms.join(', ')) : 'none'}`,
 		`📣 Social posts in: ${LANG_NAME[s.social_language || 'en']}`,
-		`📊 Diagrams: ${tg.esc(styleName(s.diagram_style || DIAGRAM_STYLES[0][1]))} · at most ${s.diagram_words || DEFAULT_DIAGRAM_WORDS} words a post · ${napkinKeys().length} Napkin key(s)`,
+		`📊 Diagrams: ${tg.esc(styleName(s.diagram_style || DIAGRAM_STYLES[0][1]))} · ${wordRange(s).totalMin}–${wordRange(s).totalMax} words a post (${wordRange(s).min}–${wordRange(s).max} per language) · ${napkinKeys().length} Napkin key(s)`,
 		'',
 		'<i>📄 sends a prompt as a file: edit it and send it back as a reply to replace it.</i>',
 	].join('\n');
@@ -154,8 +157,9 @@ function settingsButtons(s) {
 		[b('🤖 AI model', 'g:llm'), b('🎙 Speech model', 'g:stt')],
 		[b(`🧠 Effort: ${s.reasoning_effort || 'low'}`, 'g:eff'), b(`📣 Social: ${LANG_NAME[s.social_language || 'en']}`, 'g:soc')],
 		[b('🔤 Names & terms', 'g:kt')],
-		[b('📊 Diagram style', 'g:dst'), b(`📊 Words: ${s.diagram_words || DEFAULT_DIAGRAM_WORDS}`, 'g:dw')],
+		[b('📊 Diagram style', 'g:dst'), b(`📊 Words: ${wordRange(s).totalMin}–${wordRange(s).totalMax}`, 'g:dw')],
 		[b('📄 Writing prompt', 'g:pw'), b('📄 Translation prompt', 'g:pt')],
+		[b('📄 Diagram prompt', 'g:pd')],
 		[{ text: '🔗 Open in CMS', url: cmsSettingsLink() }],
 	];
 }
@@ -206,15 +210,39 @@ async function onGlobal(q, sub, arg) {
 			return chosen ? menu({ diagram_style: chosen[1] }, `Style: ${chosen[0]}`) : menu();
 		}
 		case 'dw': {
-			const cur = Number(s.diagram_words) || DEFAULT_DIAGRAM_WORDS;
-			if (!arg) return pick('Most words sent to Napkin per post (both languages together). Napkin credits go by the words.', [[70, 100, 150, 200].map((n) => b(`${mark(n, cur)}${n}`, `g:dw:${n}`))]);
-			return menu({ diagram_words: Number(arg) }, `${arg} words a post`);
+			// ranges per post, both languages together (each language gets half)
+			const RANGES = [[80, 200], [120, 300], [160, 400]];
+			const { totalMin, totalMax } = wordRange(s);
+			if (!arg) {
+				return pick('Words sent to Napkin per post, both languages together (each gets half). Napkin credits go by the words.',
+					[RANGES.map(([lo, hi], i) => b(`${lo === totalMin && hi === totalMax ? '✓ ' : ''}${lo}–${hi}`, `g:dw:${i}`))]);
+			}
+			const [lo, hi] = RANGES[Number(arg)] || RANGES[1];
+			return menu({ diagram_words_min: lo, diagram_words: hi }, `${lo}–${hi} words a post`);
 		}
 		case 'pw':
-		case 'pt': {
-			const [file, field] = sub === 'pw' ? ['writing-prompt.md', 'system_prompt'] : ['translation-prompt.md', 'translation_prompt'];
-			await tg.sendDocument(file, s[field] || '', { chatId, caption: `📄 ${sub === 'pw' ? 'Writing' : 'Translation'} prompt. Edit it and send it back as a reply (keep the file name) to replace it.` });
+		case 'pt':
+		case 'pd': {
+			const field = PROMPT_BUTTON[sub];
+			const p = PROMPTS[field];
+			const custom = Boolean(s[field]?.trim()) && s[field].trim() !== defaultPrompt(field).trim();
+			const holders = field === 'diagram_prompt'
+				? `\nPlaceholders, filled in for each post: ${Object.entries(DIAGRAM_PLACEHOLDERS).map(([k, v]) => `<code>{{${k}}}</code> ${v}`).join(', ')}.`
+				: '';
+			await tg.sendDocument(p.download, s[field]?.trim() || defaultPrompt(field), {
+				chatId,
+				caption: `📄 <b>${p.name}</b>${custom ? ' (edited)' : ' (default)'}. Edit the file and send it back as a reply (keep the file name) to replace it.${holders}`,
+				buttons: custom ? [[b('♻️ Go back to the default', `g:rst:${sub}`)]] : undefined,
+			});
 			return tg.answerCallback(q.id, 'Sent below');
+		}
+		case 'rst': {
+			const field = PROMPT_BUTTON[arg];
+			if (!field) return tg.answerCallback(q.id, 'Unknown prompt.');
+			await updateSettings({ [field]: defaultPrompt(field) });
+			await tg.clearButtons(chatId, msgId);
+			await say(chatId, `♻️ ${PROMPTS[field].name} is back to the default (${tg.esc(q.from?.first_name || 'someone')}). It is used from the next run on.`);
+			return tg.answerCallback(q.id, 'Back to the default');
 		}
 		default:
 			return tg.answerCallback(q.id, 'Unknown setting.');
@@ -402,7 +430,12 @@ async function onFile(m, file, replyTo, who) {
 		const text = (await tg.downloadTelegramFile(file.file_id)).toString('utf8').replace(/^﻿/, '').trim();
 		if (!text) return say(chatId, 'That file is empty, so the prompt was not changed.');
 		await updateSettings({ [promptField]: text });
-		return say(chatId, `✅ ${promptField === 'system_prompt' ? 'Writing' : 'Translation'} prompt replaced (${text.length.toLocaleString('en')} characters) by ${tg.esc(who)}. It is used from the next run on.`);
+		// the diagram prompt is told the word range through {{min}} / {{max}}
+		const missing = promptField === 'diagram_prompt' ? ['min', 'max'].filter((k) => !text.includes(`{{${k}}}`)) : [];
+		const warn = missing.length
+			? `\n⚠️ It has no ${missing.map((k) => `<code>{{${k}}}</code>`).join(' / ')}, so the AI is not told the word range (the bot still checks it).`
+			: '';
+		return say(chatId, `✅ ${PROMPTS[promptField].name} replaced (${text.length.toLocaleString('en')} characters) by ${tg.esc(who)}. It is used from the next run on.${warn}`);
 	}
 
 	// An edited draft: post-<id>.<lang>.md (or any .md sent as a reply to a draft file)

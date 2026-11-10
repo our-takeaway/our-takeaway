@@ -342,12 +342,25 @@ const settingsFields = [
 		translations: [{ language: 'en-US', translation: 'Diagram style' }],
 		note: 'A Napkin style id (built-in or your own from app.napkin.ai). See api.napkin.ai/docs/styles.',
 	}, { default_value: DIAGRAM_STYLES[0][1] }),
+	field('diagram_words_min', 'integer', {
+		interface: 'input', group: 'diagram_settings_group', width: 'half',
+		options: { min: 20, max: 400 },
+		translations: [{ language: 'en-US', translation: 'Fewest words per post' }],
+		note: 'Both languages together; each language gets half. Shorter text is sent back to the AI once for more precise detail.',
+	}, { default_value: 120 }),
 	field('diagram_words', 'integer', {
 		interface: 'input', group: 'diagram_settings_group', width: 'half',
-		options: { min: 20, max: 200 },
-		translations: [{ language: 'en-US', translation: 'Words per diagram' }],
-		note: 'Most words sent to Napkin per post, both languages together. Napkin credits go by the words: 70 ≈ 500 credits a week for one post a day.',
-	}, { default_value: 70 }),
+		options: { min: 60, max: 400 },
+		translations: [{ language: 'en-US', translation: 'Most words per post' }],
+		note: 'Both languages together; each language gets half (300 → 150 each). Napkin credits go by the words. Longer text is trimmed, title and decision kept.',
+	}, { default_value: 300 }),
+	field('diagram_prompt', 'text', {
+		interface: 'input-rich-text-md', group: 'diagram_settings_group',
+		translations: [{ language: 'en-US', translation: 'Diagram prompt' }],
+		note: 'How the AI picks the idea, writes the text Napkin draws and chooses where the diagram goes. ' +
+			'Filled in for each post: {{min}} {{max}} (words per language), {{target}}, {{languages}}, {{layouts}}. ' +
+			'Empty = the default (directus/prompts/diagram.md). Also editable in Telegram: /settings → 📄 Diagram prompt.',
+	}),
 ];
 
 // ---------- apply ----------
@@ -403,6 +416,7 @@ const OLD_WRITER_PROMPTS = [
 	'6613a6dde632c205f48bc7aaca1b629beddf5524cb8115db4eb20cec885bf41e', // quotes and covers, hosts-only names
 	'0e4a29a4f0ffdafb91c34dfc00cd57f9a3646a53ccc8792e89280fa92b5d17c6', // any named speaker
 ];
+const OLD_DIAGRAM_PROMPTS = []; // add the sha256 of diagram.md here whenever it changes
 const OLD_TRANSLATOR_PROMPTS = [
 	'82434469844885c8fca64f5a0c74c760aba153573d1f4fb33684f9bef87edac6',
 	'e6eb9f05702e2138ec3f27ed11d58c973c99711a5d6b13058077939e9a2c78da',
@@ -414,6 +428,9 @@ async function ensureSettings(oldProvider) {
 	const patch = {};
 	const writer = await readPrompt('writer.md');
 	const translator = await readPrompt('translator.md');
+	const diagram = await readPrompt('diagram.md');
+	if (!s.diagram_prompt || OLD_DIAGRAM_PROMPTS.includes(sha(s.diagram_prompt))) patch.diagram_prompt = diagram;
+	else if (s.diagram_prompt !== diagram) console.log('writer_settings: Diagram prompt was edited, kept it (the latest default is directus/prompts/diagram.md)');
 	if (!s.system_prompt || OLD_WRITER_PROMPTS.includes(sha(s.system_prompt))) patch.system_prompt = writer;
 	else if (s.system_prompt !== writer) console.log('writer_settings: Writing prompt was edited in Directus, kept it (the latest default is directus/prompts/writer.md)');
 	if (!s.translation_prompt || OLD_TRANSLATOR_PROMPTS.includes(sha(s.translation_prompt))) patch.translation_prompt = translator;
@@ -427,7 +444,9 @@ async function ensureSettings(oldProvider) {
 	if (!s.social_language) patch.social_language = 'en';
 	if (!s.reddit_kind) patch.reddit_kind = 'link';
 	if (!s.diagram_style) patch.diagram_style = DIAGRAM_STYLES[0][1];
-	if (!s.diagram_words) patch.diagram_words = 70;
+	// 70 was the first default (a very short diagram); the range is now 120–300 per post
+	if (!s.diagram_words || s.diagram_words === 70) patch.diagram_words = 300;
+	if (!s.diagram_words_min) patch.diagram_words_min = 120;
 	if (Object.keys(patch).length) {
 		await api('PATCH', '/items/writer_settings', patch);
 		console.log(`writer_settings: set ${Object.keys(patch).join(', ')}`);
