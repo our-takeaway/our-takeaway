@@ -211,10 +211,10 @@ async function onGlobal(q, sub, arg) {
 		}
 		case 'dw': {
 			// ranges per post, both languages together (each language gets half)
-			const RANGES = [[80, 200], [120, 300], [160, 400]];
+			const RANGES = [[40, 100], [50, 120], [80, 200], [120, 300]];
 			const { totalMin, totalMax } = wordRange(s);
 			if (!arg) {
-				return pick('Words sent to Napkin per post, both languages together (each gets half). Napkin credits go by the words.',
+				return pick('Words in the diagram per post, both languages together (each gets half). Napkin charges about 1 credit per word, so this is roughly the credits per post.',
 					[RANGES.map(([lo, hi], i) => b(`${lo === totalMin && hi === totalMax ? '✓ ' : ''}${lo}–${hi}`, `g:dw:${i}`))]);
 			}
 			const [lo, hi] = RANGES[Number(arg)] || RANGES[1];

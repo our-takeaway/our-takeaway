@@ -26,16 +26,19 @@ export const DIAGRAM_STYLES = [
 	['Hand-Tinted', 'D1GPWS1DCDQPRVVJCSTPRBBJ68'],
 	['Soft Spectrum', 'CDQPRVVJCSTPRBBKDXK78BBJ68'],
 ];
-// Words sent to Napkin for the whole post (both languages together); each language gets half.
-// 120–300 → 60–150 words per diagram: room for precise details, credits still in check.
-export const DEFAULT_DIAGRAM_WORDS = 300;
-export const DEFAULT_DIAGRAM_MIN_WORDS = 120;
+// What Napkin charges: "approximately 1 credit per word selected for generation" (napkin.ai/pricing);
+// one hands-on review measured it by the words shown in the finished picture instead. Either way
+// the words in the picture are what cost, and with text_extraction_mode "preserve" the picture shows
+// the words we send. So the text is short and exact: a title, 3–6 items, no filler.
+// Words for the whole post (both languages together); each language gets half: 50–120 → 25–60.
+export const DEFAULT_DIAGRAM_WORDS = 120;
+export const DEFAULT_DIAGRAM_MIN_WORDS = 50;
 export const BLOG_LANGS = 2;
 export const styleName = (id) => DIAGRAM_STYLES.find(([, s]) => s === id)?.[0] || id;
 
 /** The words-per-language range from Writer Settings (totals per post ÷ 2). */
 export function wordRange(s = {}) {
-	const max = Math.min(400, Math.max(60, Number(s.diagram_words) || DEFAULT_DIAGRAM_WORDS));
+	const max = Math.min(400, Math.max(40, Number(s.diagram_words) || DEFAULT_DIAGRAM_WORDS));
 	const min = Math.min(max, Math.max(20, Number(s.diagram_words_min) || DEFAULT_DIAGRAM_MIN_WORDS));
 	return { min: Math.floor(min / BLOG_LANGS), max: Math.floor(max / BLOG_LANGS), totalMin: min, totalMax: max };
 }
@@ -44,6 +47,58 @@ const LAYOUTS = ['flowchart', 'timeline', 'comparison', 'cycle', 'mindmap', 'hie
 const LANG_TAG = { fa: 'fa-IR', en: 'en-US' };
 const words = (s) => String(s || '').trim().split(/\s+/).filter(Boolean).length;
 const langsOf = (post) => ['fa', 'en'].filter((l) => post[`body_${l}`]?.trim());
+
+// ---------- where it goes: after block N of the post ----------
+
+// The post split into blocks: headings, paragraphs, lists, quotes; a fenced code block stays whole.
+// site/src/lib/directus-loader.ts splits the same way to put the figure after the chosen block.
+export function blocksOf(md) {
+	const blocks = [];
+	let cur = [];
+	let fence = false;
+	const flush = () => {
+		if (cur.length) blocks.push(cur.join('\n'));
+		cur = [];
+	};
+	for (const line of String(md || '').split('\n')) {
+		if (/^\s*(```|~~~)/.test(line)) {
+			if (!fence) flush();
+			cur.push(line);
+			fence = !fence;
+			if (!fence) flush();
+			continue;
+		}
+		if (fence) cur.push(line);
+		else if (!line.trim()) flush();
+		else if (/^#{1,6}\s/.test(line)) {
+			flush();
+			blocks.push(line);
+		} else cur.push(line);
+	}
+	flush();
+	return blocks;
+}
+
+const isHeading = (b) => /^#{1,6}\s/.test(b);
+// the boxes at the end: takeaways and open questions
+const isBox = (b) => /^##\s*(our takeaways|open questions|برداشت ما|سؤال|سوال|پرسش)/i.test(b);
+export const plainText = (s) => String(s).replace(/<[^>]+>/g, ' ').replace(/[#>*_`[\]()|]/g, ' ').replace(/\s+/g, ' ').trim();
+
+// Turn the AI's "after block N" into a safe spot, and remember the paragraph's first words
+// (anchor), so the diagram stays with that paragraph even if other parts are edited later.
+export function placement(md, n) {
+	const blocks = blocksOf(md);
+	if (!blocks.length) return { after_block: 0, anchor: '', section: '' };
+	let i = Math.min(Math.max(1, Math.round(Number(n) || 1)), blocks.length) - 1;
+	while (i < blocks.length - 1 && isHeading(blocks[i])) i++; // under a heading, not right after it
+	const box = blocks.findIndex(isBox);
+	if (box > 0 && i >= box) i = box - 1; // never inside the takeaways / open questions
+	while (i > 0 && isHeading(blocks[i])) i--;
+	const section = blocks.slice(0, i + 1).reverse().find(isHeading)?.replace(/^#+\s*/, '') || '';
+	return { after_block: i + 1, anchor: plainText(blocks[i]).split(' ').slice(0, 12).join(' '), section };
+}
+
+const numbered = (md) => blocksOf(md).map((b, i) => `[${i + 1}] ${b}`).join('\n\n');
 
 // The planning prompt is Writer Settings → Diagram prompt (default: directus/prompts/diagram.md).
 // Placeholders: {{min}} {{max}} {{target}} {{languages}} {{layouts}}.
@@ -87,8 +142,8 @@ async function planDiagram(post, model, { min, max }, template) {
 	const str = { type: 'string' };
 	const version = {
 		type: 'object',
-		properties: { content: str, after_heading: str, position: { type: 'string', enum: ['start', 'end'] }, alt: str, caption: str },
-		required: ['content', 'after_heading', 'position', 'alt', 'caption'],
+		properties: { content: str, place_after: { type: 'integer' }, alt: str, caption: str },
+		required: ['content', 'place_after', 'alt', 'caption'],
 		additionalProperties: false,
 	};
 	const schema = {
@@ -97,7 +152,9 @@ async function planDiagram(post, model, { min, max }, template) {
 		required: ['layout', ...langs],
 		additionalProperties: false,
 	};
-	const posts = langs.map((l) => `<post lang="${l}">\n# ${post[`title_${l}`] || ''}\n\n${post[`body_${l}`]}\n</post>`).join('\n\n');
+	const posts = langs
+		.map((l) => `<post lang="${l}" title="${String(post[`title_${l}`] || '').replace(/"/g, "'")}">\n${numbered(post[`body_${l}`])}\n</post>`)
+		.join('\n\n');
 	const messages = [{ role: 'system', content: planPrompt(template, { min, max }, langs) }, { role: 'user', content: posts }];
 	let { plan, text } = await askAI(model, messages, schema);
 
@@ -107,9 +164,9 @@ async function planDiagram(post, model, { min, max }, template) {
 		const counts = langs.map((l) => `${LANG_NAME[l]}: ${words(plan[l].content)} words`).join(', ');
 		messages.push({ role: 'assistant', content: text }, {
 			role: 'user',
-			content: `The diagram text is too short (${counts}). Rewrite it with between ${min} and ${max} words per language: ` +
-				'make each item\'s detail more precise with what the post actually says (what, how, why, numbers, names), or add an item the idea needs. ' +
-				'No filler. Keep the same idea, layout and placement.',
+			content: `The diagram text is too short to be exact (${counts}). Rewrite it with between ${min} and ${max} words per language: ` +
+				'add the specific facts each item is missing (numbers, names, what changed), or an item the idea needs. ' +
+				'Keep it tight, no filler. Keep the same idea, layout and placement.',
 		});
 		({ plan } = await askAI(model, messages, schema));
 	}
@@ -166,16 +223,17 @@ export async function makeDiagram(id, who = 'someone') {
 			const file = await uploadFile(`post-${id}-diagram.${lang}.png`, drawn.buffer, 'image/png', `Diagram #${id} (${LANG_NAME[lang]})`);
 			result[lang] = {
 				file, width: drawn.width, height: drawn.height,
-				after: v.after_heading.trim(), position: v.position === 'end' ? 'end' : 'start',
+				...placement(post[`body_${lang}`], v.place_after),
 				alt: v.alt.trim(), caption: v.caption.trim(), text: content, words: words(content), key: drawn.key,
 			};
 		}
 
 		await updatePost(id, { diagram: result, diagram_status: 'ready' });
 		for (const lang of ['fa', 'en']) if (old?.[lang]?.file) await deleteFile(old[lang].file).catch(() => {});
+		const total = langs.reduce((n, l) => n + result[l].words, 0);
 		const used = langs.map((l) => `${LANG_NAME[l]} ${result[l].words}`).join(' + ');
 		if (post.status === 'published') queueBuild().catch((e) => console.error('build after diagram:', e.message));
-		await showCard(id, { repost: true, note: `📊 Diagram ready (${used} words). 🖼 See it below the buttons.` });
+		await showCard(id, { repost: true, note: `📊 Diagram ready: ${used} words, about ${total} Napkin credits. 🖼 See it below the buttons.` });
 	} catch (e) {
 		console.error(`diagram #${id}:`, e.message);
 		// a diagram that was already there stays; the error is shown next to it
@@ -202,7 +260,9 @@ export async function sendDiagram(id, chatId) {
 	for (const lang of ['fa', 'en']) {
 		const d = post.diagram?.[lang];
 		if (!d?.file) continue;
-		const where = d.after ? `Placed at the ${d.position === 'end' ? 'end' : 'start'} of “${d.after}”` : 'Placed after the opening';
+		const where = d.anchor
+			? `Placed${d.section ? ` in “${d.section}”` : ''}, after the paragraph “${d.anchor}…”`
+			: d.after ? `Placed in “${d.after}”` : 'Placed after the opening';
 		const caption = `📊 <b>#${id}</b> ${LANG_NAME[lang]} · ${tg.esc(d.caption || '')}\n<i>${tg.esc(where)} · ${d.words} words</i>`;
 		await tg.sendPhoto(await downloadFile(d.file), `post-${id}-diagram.${lang}.png`, { chatId, caption });
 	}

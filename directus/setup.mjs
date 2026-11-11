@@ -347,13 +347,13 @@ const settingsFields = [
 		options: { min: 20, max: 400 },
 		translations: [{ language: 'en-US', translation: 'Fewest words per post' }],
 		note: 'Both languages together; each language gets half. Shorter text is sent back to the AI once for more precise detail.',
-	}, { default_value: 120 }),
+	}, { default_value: 50 }),
 	field('diagram_words', 'integer', {
 		interface: 'input', group: 'diagram_settings_group', width: 'half',
-		options: { min: 60, max: 400 },
+		options: { min: 40, max: 400 },
 		translations: [{ language: 'en-US', translation: 'Most words per post' }],
-		note: 'Both languages together; each language gets half (300 → 150 each). Napkin credits go by the words. Longer text is trimmed, title and decision kept.',
-	}, { default_value: 300 }),
+		note: 'Both languages together; each language gets half (120 → 60 each). Napkin charges about 1 credit per word in the picture, so this is roughly what a diagram costs. Longer text is trimmed, title and decision kept.',
+	}, { default_value: 120 }),
 	field('diagram_prompt', 'text', {
 		interface: 'input-rich-text-md', group: 'diagram_settings_group',
 		translations: [{ language: 'en-US', translation: 'Diagram prompt' }],
@@ -416,7 +416,10 @@ const OLD_WRITER_PROMPTS = [
 	'6613a6dde632c205f48bc7aaca1b629beddf5524cb8115db4eb20cec885bf41e', // quotes and covers, hosts-only names
 	'0e4a29a4f0ffdafb91c34dfc00cd57f9a3646a53ccc8792e89280fa92b5d17c6', // any named speaker
 ];
-const OLD_DIAGRAM_PROMPTS = []; // add the sha256 of diagram.md here whenever it changes
+// add the sha256 of diagram.md here whenever it changes
+const OLD_DIAGRAM_PROMPTS = [
+	'ecd5075739828a67b21170d4e6d5cc09df3acecd843b7bc2ee9cf76e215a4eda', // 60–150 words, start/end of a section
+];
 const OLD_TRANSLATOR_PROMPTS = [
 	'82434469844885c8fca64f5a0c74c760aba153573d1f4fb33684f9bef87edac6',
 	'e6eb9f05702e2138ec3f27ed11d58c973c99711a5d6b13058077939e9a2c78da',
@@ -445,8 +448,10 @@ async function ensureSettings(oldProvider) {
 	if (!s.reddit_kind) patch.reddit_kind = 'link';
 	if (!s.diagram_style) patch.diagram_style = DIAGRAM_STYLES[0][1];
 	// 70 was the first default (a very short diagram); the range is now 120–300 per post
-	if (!s.diagram_words || s.diagram_words === 70) patch.diagram_words = 300;
-	if (!s.diagram_words_min) patch.diagram_words_min = 120;
+	// earlier defaults (70, then 120–300) → 50–120: Napkin charges by the words in the picture
+	const oldRange = s.diagram_words === 70 || (s.diagram_words === 300 && s.diagram_words_min === 120);
+	if (!s.diagram_words || oldRange) patch.diagram_words = 120;
+	if (!s.diagram_words_min || oldRange) patch.diagram_words_min = 50;
 	if (Object.keys(patch).length) {
 		await api('PATCH', '/items/writer_settings', patch);
 		console.log(`writer_settings: set ${Object.keys(patch).join(', ')}`);

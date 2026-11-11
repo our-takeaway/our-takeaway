@@ -48,9 +48,55 @@ async function diagramSrc(url: string, token: string, fileId: string) {
 	return `/diagrams/${name}`;
 }
 
-// Put the figure in the section whose heading is `after`: right after its first paragraph
-// (position "start") or at its end ("end"). No heading, or one that isn't found: after the opening.
-export function placeDiagram(body: string, figure: string, after = '', position = 'end') {
+// The post split into blocks: headings, paragraphs, lists, quotes; a fenced code block stays whole.
+// Same as blocksOf() in worker/src/diagram.js, which numbers these blocks for the AI.
+export function blocksOf(md: string) {
+	const blocks: string[] = [];
+	let cur: string[] = [];
+	let fence = false;
+	const flush = () => {
+		if (cur.length) blocks.push(cur.join('\n'));
+		cur = [];
+	};
+	for (const line of String(md || '').split('\n')) {
+		if (/^\s*(```|~~~)/.test(line)) {
+			if (!fence) flush();
+			cur.push(line);
+			fence = !fence;
+			if (!fence) flush();
+			continue;
+		}
+		if (fence) cur.push(line);
+		else if (!line.trim()) flush();
+		else if (/^#{1,6}\s/.test(line)) {
+			flush();
+			blocks.push(line);
+		} else cur.push(line);
+	}
+	flush();
+	return blocks;
+}
+
+const plainText = (s: string) => String(s).replace(/<[^>]+>/g, ' ').replace(/[#>*_`[\]()|]/g, ' ').replace(/\s+/g, ' ').trim();
+const loose = (s: string) => plainText(s).toLowerCase().replace(/[^\p{L}\p{N} ]/gu, '');
+
+// Put the figure right after the paragraph the AI chose: found by its first words (anchor), so
+// edits elsewhere don't move it; else by its number. Older diagrams carry a section instead.
+export function placeDiagram(body: string, figure: string, d: Row) {
+	const blocks = blocksOf(body);
+	let i = -1;
+	if (d.anchor) {
+		const want = loose(d.anchor);
+		i = blocks.findIndex((b) => loose(b).startsWith(want));
+	}
+	if (i < 0 && Number(d.after_block) > 0) i = Math.min(Number(d.after_block), blocks.length) - 1;
+	if (i < 0) return placeBySection(body, figure, d.after, d.position);
+	blocks.splice(i + 1, 0, figure);
+	return blocks.join('\n\n');
+}
+
+// Diagrams made before the paragraph anchors: start (after the first paragraph) or end of a section.
+function placeBySection(body: string, figure: string, after = '', position = 'end') {
 	const lines = body.split('\n');
 	const isH2 = (l: string) => /^##\s+/.test(l);
 	const norm = (s: string) => s.replace(/^#+\s*/, '').replace(/[*_`"«»“”]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -164,7 +210,7 @@ export function directusLoader(): Loader {
 					if (diagram?.file && url) {
 						try {
 							const src = await diagramSrc(url, process.env.DIRECTUS_TOKEN ?? '', diagram.file);
-							body = placeDiagram(body, diagramFigure(src, diagram), diagram.after, diagram.position);
+							body = placeDiagram(body, diagramFigure(src, diagram), diagram);
 						} catch (e) {
 							logger.warn(`post ${row.slug}: diagram skipped (${(e as Error).message})`);
 						}
