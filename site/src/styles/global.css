@@ -440,19 +440,24 @@ html[lang='fa'] .post-list p {
 	/* positions in Cover.astro are left-to-right; Persian covers are mirrored there */
 	direction: ltr;
 }
-.cover[data-tone='1'] {
+.cover[data-tone='1'],
+.avatar[data-tone='1'] {
 	--cv: #b07b16;
 }
-.cover[data-tone='2'] {
+.cover[data-tone='2'],
+.avatar[data-tone='2'] {
 	--cv: #b4532f;
 }
-.cover[data-tone='3'] {
+.cover[data-tone='3'],
+.avatar[data-tone='3'] {
 	--cv: #5b7a3a;
 }
-.cover[data-tone='4'] {
+.cover[data-tone='4'],
+.avatar[data-tone='4'] {
 	--cv: #7a4a8c;
 }
-.cover[data-tone='5'] {
+.cover[data-tone='5'],
+.avatar[data-tone='5'] {
 	--cv: #2f5a8f;
 }
 .cover-number {
@@ -478,6 +483,129 @@ html[lang='fa'] .cover-label {
 }
 .post-cover {
 	margin-bottom: 32px;
+}
+
+/* ── people (components/Avatar, Byline, PeopleCards) ────────────────────── */
+.avatar {
+	--size: 40px;
+	--cv: #0f6b62;
+	width: var(--size);
+	height: var(--size);
+	flex: none;
+	border-radius: 50%;
+	object-fit: cover;
+	background: var(--surface-2);
+	box-shadow: 0 0 0 2px var(--bg);
+}
+.avatar-ph {
+	display: inline-grid;
+	place-items: center;
+	background: color-mix(in oklab, var(--cv) 22%, var(--surface));
+	color: color-mix(in oklab, var(--cv) 80%, var(--text));
+	font-family: var(--font-ui);
+	font-weight: 800;
+	font-size: calc(var(--size) * 0.42);
+	line-height: 1;
+	user-select: none;
+}
+/* photos overlap a little, like a group */
+.avatars {
+	display: inline-flex;
+	align-items: center;
+}
+.avatars .avatar + .avatar {
+	margin-inline-start: calc(var(--size) * -0.3);
+}
+.avatars-small {
+	margin-inline-end: 2px;
+}
+
+.byline {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin-top: 22px;
+}
+.byline-names {
+	font-family: var(--font-ui);
+	font-weight: 700;
+	font-size: 0.95rem;
+	line-height: 1.4;
+	color: var(--text);
+}
+.byline-meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	font-family: var(--font-ui);
+	font-size: 0.85rem;
+	color: var(--muted);
+}
+
+.people {
+	max-width: var(--measure);
+	margin: 36px 0 8px;
+}
+.people-heading {
+	margin: 0 0 6px;
+	font-family: var(--font-ui);
+	font-size: 0.8rem;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+html[lang='fa'] .people-heading {
+	letter-spacing: 0;
+	font-size: 0.9rem;
+}
+.people ul {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+.person {
+	display: flex;
+	align-items: flex-start;
+	gap: 16px;
+	padding: 16px 0;
+	border-top: 1px solid var(--border);
+}
+.person:last-child {
+	border-bottom: 1px solid var(--border);
+}
+/* the AI note right after the people needs no second line */
+.people + .post-footer {
+	border-top: 0;
+	padding-top: 8px;
+}
+.person-name {
+	font-family: var(--font-display);
+	font-size: 1.15rem;
+	font-weight: 600;
+	line-height: 1.4;
+	color: var(--text);
+}
+html[lang='fa'] .person-name {
+	font-weight: 800;
+	font-size: 1.05rem;
+}
+.person-name a {
+	color: inherit;
+	text-decoration: underline;
+	text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+	text-underline-offset: 3px;
+}
+.person-bio {
+	margin: 4px 0 0;
+	font-family: var(--font-body);
+	font-size: 1rem;
+	line-height: 1.6;
+	color: var(--muted);
+}
+html[lang='fa'] .person-bio {
+	font-size: 0.95rem;
+	line-height: 1.9;
 }
 
 /* ── article ────────────────────────────────────────────────────────────── */

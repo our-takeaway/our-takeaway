@@ -1,9 +1,12 @@
 ---
 import { render } from 'astro:content';
+import Byline from '../../../components/Byline.astro';
 import Cover from '../../../components/Cover.astro';
+import PeopleCards from '../../../components/PeopleCards.astro';
 import { LANGS, SITE, type Lang } from '../../../consts';
 import Base from '../../../layouts/Base.astro';
-import { digits, formatDate, otherLang, readingMinutes, t } from '../../../lib/i18n';
+import { formatDate, otherLang, readingMinutes, t } from '../../../lib/i18n';
+import { peopleOf } from '../../../lib/people';
 import { getPosts, type Post } from '../../../lib/posts';
 import { tagSlug } from '../../../lib/tags';
 
@@ -36,6 +39,7 @@ const other = otherLang(lang);
 const otherHref = langs.includes(other) ? `/${other}/blog/${slug}/` : undefined;
 // this version is the AI translation when the session was in the other language
 const original = sourceLang && sourceLang !== lang && otherHref ? otherHref : undefined;
+const { people, byAuthors } = await peopleOf(post.data.people, lang);
 
 const url = new URL(`/${lang}/blog/${slug}/`, Astro.site).href;
 const jsonLd = {
@@ -50,7 +54,12 @@ const jsonLd = {
 	dateModified: (updatedDate ?? pubDate).toISOString(),
 	image: new URL('/og.png', Astro.site).href,
 	keywords: tags.join(', ') || undefined,
-	author: SITE[lang].authors.map((name) => ({ '@type': 'Person', name })),
+	author: (people.length ? people : SITE[lang].authors.map((name) => ({ name, avatar: undefined, link: undefined }))).map((p) => ({
+		'@type': 'Person',
+		name: p.name,
+		...(p.avatar ? { image: new URL(p.avatar, Astro.site).href } : {}),
+		...(p.link ? { url: p.link } : {}),
+	})),
 	publisher: { '@type': 'Organization', name: SITE[lang].title, url: new URL(`/${lang}/`, Astro.site).href },
 	isPartOf: { '@type': 'Blog', name: SITE[lang].title, url: new URL(`/${lang}/`, Astro.site).href },
 };
@@ -68,13 +77,9 @@ const jsonLdText = JSON.stringify(jsonLd).replace(/</g, '\\u003c');
 	<article class="post">
 		<div class="post-cover"><Cover slug={slug} lang={lang} number={meeting} /></div>
 		<header class="post-header">
-			<div class="meta">
-				<time datetime={pubDate.toISOString()}>{formatDate(pubDate, lang)}</time>
-				<span>·</span>
-				<span>{digits(readingMinutes(post.body), lang)} {t(lang, 'minRead')}</span>
-			</div>
 			<h1>{title}</h1>
 			<p class="lede">{description}</p>
+			<Byline lang={lang} people={people} date={pubDate} minutes={readingMinutes(post.body)} />
 			{updatedDate && updatedDate.toDateString() !== pubDate.toDateString() && (
 				<p class="muted small">{t(lang, 'updated')} {formatDate(updatedDate, lang)}</p>
 			)}
@@ -87,6 +92,7 @@ const jsonLdText = JSON.stringify(jsonLd).replace(/</g, '\\u003c');
 				{tags.map((tag) => <a class="tag" href={`/${lang}/tags/${encodeURIComponent(tagSlug(tag))}/`}>#<bdi>{tag}</bdi></a>)}
 			</p>
 		)}
+		<PeopleCards lang={lang} people={people} byAuthors={byAuthors} />
 		<aside class="post-footer">
 			<p class="muted small">
 				{t(lang, 'aiNote')}

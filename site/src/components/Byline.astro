@@ -1,0 +1,31 @@
+---
+// Under a post's title: who was in the session (overlapping photos and names), then date and reading time.
+import type { Lang } from '../consts';
+import { digits, formatDate, t } from '../lib/i18n';
+import { joinNames, type Person } from '../lib/people';
+import Avatar from './Avatar.astro';
+
+interface Props {
+	lang: Lang;
+	people: Person[];
+	date: Date;
+	minutes: number;
+}
+const { lang, people, date, minutes } = Astro.props;
+---
+
+<div class="byline">
+	{people.length > 0 && (
+		<span class="avatars">
+			{people.slice(0, 4).map((p) => <Avatar person={p} size={44} />)}
+		</span>
+	)}
+	<div class="byline-text">
+		{people.length > 0 && <div class="byline-names">{joinNames(people.map((p) => p.name), lang)}</div>}
+		<div class="byline-meta">
+			<time datetime={date.toISOString()}>{formatDate(date, lang)}</time>
+			<span aria-hidden="true">·</span>
+			<span>{digits(minutes, lang)} {t(lang, 'minRead')}</span>
+		</div>
+	</div>
+</div>

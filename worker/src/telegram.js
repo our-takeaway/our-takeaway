@@ -141,6 +141,7 @@ export async function setWebhook(url, secret) {
 			{ command: 'posts', description: 'Every post; open its card' },
 			{ command: 'post', description: 'Open one post, e.g. /post 12' },
 			{ command: 'settings', description: 'Default models, prompts, names and terms' },
+			{ command: 'people', description: 'Photos, names and bios shown on posts' },
 			{ command: 'help', description: 'How the bot works' },
 		],
 	}).catch((e) => console.error('telegram commands:', e.message));

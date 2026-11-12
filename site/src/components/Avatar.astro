@@ -1,0 +1,16 @@
+---
+// A round photo, or a coloured circle with the first letter when there is no photo yet.
+import type { Person } from '../lib/people';
+
+interface Props {
+	person: Person;
+	size?: number;
+}
+const { person, size = 40 } = Astro.props;
+---
+
+{person.avatar ? (
+	<img class="avatar" src={person.avatar} alt="" width={size} height={size} style={`--size:${size}px`} loading="lazy" decoding="async" />
+) : (
+	<span class="avatar avatar-ph" data-tone={person.tone} style={`--size:${size}px`} aria-hidden="true">{person.initial}</span>
+)}

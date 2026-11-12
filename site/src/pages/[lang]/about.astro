@@ -1,12 +1,15 @@
 ---
+import PeopleCards from '../../components/PeopleCards.astro';
 import { CONTACT_EMAIL, SITE, type Lang } from '../../consts';
 import Base from '../../layouts/Base.astro';
 import { langPaths, otherLang, t } from '../../lib/i18n';
+import { authors } from '../../lib/people';
 
 export const getStaticPaths = langPaths;
 
 const lang = Astro.params.lang as Lang;
 const site = SITE[lang];
+const people = await authors(lang);
 ---
 
 <Base lang={lang} title={t(lang, 'about')} altHref={`/${otherLang(lang)}/about/`}>
@@ -17,7 +20,11 @@ const site = SITE[lang];
 			<h2>{t(lang, 'howItWorks')}</h2>
 			<p>{t(lang, 'howItWorksText')}</p>
 			<h2>{t(lang, 'authors')}</h2>
-			<ul>{site.authors.map((a) => <li>{a}</li>)}</ul>
+		</div>
+		{people.length > 0
+			? <PeopleCards lang={lang} people={people} byAuthors heading={false} />
+			: <ul>{site.authors.map((a) => <li>{a}</li>)}</ul>}
+		<div class="prose">
 			<h2>{t(lang, 'contact')}</h2>
 			<p>
 				{t(lang, 'askUs')} {t(lang, 'emailUs')}{' '}

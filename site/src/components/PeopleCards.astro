@@ -1,0 +1,34 @@
+---
+// At the end of a post: each person with a photo, name, short bio and link (like "Written by").
+import type { Lang } from '../consts';
+import { t } from '../lib/i18n';
+import type { Person } from '../lib/people';
+import Avatar from './Avatar.astro';
+
+interface Props {
+	lang: Lang;
+	people: Person[];
+	byAuthors?: boolean;
+	heading?: boolean;
+}
+const { lang, people, byAuthors = false, heading = true } = Astro.props;
+---
+
+{people.length > 0 && (
+	<section class="people" aria-label={t(lang, byAuthors ? 'writtenBy' : 'inSession')}>
+		{heading && <h2 class="people-heading">{t(lang, byAuthors ? 'writtenBy' : 'inSession')}</h2>}
+		<ul>
+			{people.map((p) => (
+				<li class="person">
+					<Avatar person={p} size={60} />
+					<div>
+						<div class="person-name">
+							{p.link ? <a href={p.link} rel="noopener" target="_blank">{p.name}</a> : p.name}
+						</div>
+						{p.bio && <p class="person-bio">{p.bio}</p>}
+					</div>
+				</li>
+			))}
+		</ul>
+	</section>
+)}

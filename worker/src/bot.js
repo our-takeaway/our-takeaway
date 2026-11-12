@@ -1,6 +1,8 @@
 import path from 'node:path';
 import { cardMessageOf, lastSpeakers, onDeleted, rememberSpeakers, showCard, speakersOf, voicesOf } from './card.js';
-import { cmsSettingsLink, createPost, deletePost, getPost, getSettings, listPosts, updatePost, updateSettings, uploadFile } from './directus.js';
+import { queueBuild } from './build.js';
+import { cmsSettingsLink, createPost, deleteFile, deletePost, getPost, getSettings, listPosts, updatePost, updateSettings, uploadFile } from './directus.js';
+import { createPerson, deletePerson, ensurePeople, findPerson, getPerson, listPeople, updatePerson } from './people.js';
 import { DIAGRAM_STYLES, makeDiagram, removeDiagram, sendDiagram, styleName, wordRange } from './diagram.js';
 import { draftFile, draftFilename, LANG_NAME, parseDraftFile, parseDraftFilename } from './drafts.js';
 import { napkinKeys } from './napkin.js';
@@ -60,6 +62,7 @@ const HELP =
 	'/posts — every post; tap one to open its card\n' +
 	'/post 12 — open post #12\n' +
 	'/settings — default models, prompts, names and terms\n' +
+	'/people — photos, names and short bios shown on posts\n' +
 	'/help — this message\n\n' +
 	'<b>Editing</b>\n' +
 	'• 📄 Drafts sends each language as a <code>.md</code> file. Edit it and send it back as a reply (keep the file name).\n' +
@@ -116,7 +119,155 @@ async function nameSpeakers(id, names, who) {
 	const rest = String(post.notes || '').split('\n').filter((l) => !/speaker\s*\d+\s*[=:]/i.test(l)).join('\n').trim();
 	await updatePost(id, { notes: [...mapping, rest].filter(Boolean).join('\n'), status: 'retry', restart_from: 'write' });
 	rememberSpeakers(names.filter(Boolean));
-	return showCard(id, { note: `🗣 ${mapping.join(' · ')} (${who}). Writing…` });
+	const added = await ensurePeople(names.filter(Boolean));
+	return showCard(id, { note: `🗣 ${mapping.join(' · ')} (${who}). Writing…${newPeopleNote(added)}` });
+}
+
+// Speakers who weren't in People yet are added, with a placeholder until someone adds a photo.
+const newPeopleNote = (added) => (added.length ? ` 👥 New in People: ${added.join(', ')} (add a photo: /people).` : '');
+
+// ---------- people (/people): the photos, names and short bios shown on posts ----------
+
+const PERSON_FIELD = { bio_en: 'English bio', bio_fa: 'Persian bio', name: 'English name', name_fa: 'Persian name', link: 'link' };
+const PERSON_ACTIONS = new Set(['pp', 'ppl', 'pa', 'pph', 'ppx', 'pbe', 'pbf', 'pne', 'pnf', 'pln', 'pho', 'pdl']);
+const rebuild = () => queueBuild().catch((e) => console.error('build after a people change:', e.message));
+
+// The question's first line says whom and what it is for: "👤 person 3 · bio_en"
+function askPerson(id, field, p) {
+	if (field === 'new') return '👤 person 0 · new\nWho should be added? Reply with the name as it should appear on the English site, e.g. <code>Javad Ahmadi</code>. The photo, the Persian name and a bio come next.';
+	if (field === 'photo') return `👤 person ${id} · photo\nSend a photo of ${tg.esc(p.name)} as a reply to this message (a photo, or an image file). It is shown round, so a face in the middle works best.`;
+	const now = p[field] ? `\nNow: <code>${tg.esc(p[field])}</code>` : '';
+	const clear = field === 'name' ? '' : '\n(Send <code>-</code> to clear it.)';
+	return `👤 person ${id} · ${field}\nReply with ${tg.esc(p.name)}'s ${PERSON_FIELD[field]}.${now}${clear}`;
+}
+
+function personText(p) {
+	const aliases = Array.isArray(p.aliases) && p.aliases.length ? ` · also: ${p.aliases.join(', ')}` : '';
+	return [
+		`👤 <b>${tg.esc(p.name)}</b>${p.name_fa ? ` · ${tg.esc(p.name_fa)}` : ''}`,
+		`<i>Matched in Notes as: ${tg.esc(p.short_name || p.name)}${tg.esc(aliases)}</i>`,
+		'',
+		`📷 Photo: ${p.avatar ? 'yes' : 'not yet (the site shows a placeholder with the first letter)'}`,
+		`⭐ ${p.host ? 'One of the authors (About page, and posts where nobody else is named)' : 'Guest'}`,
+		`EN: ${p.bio_en ? tg.esc(p.bio_en) : '<i>no English bio</i>'}`,
+		`FA: ${p.bio_fa ? tg.esc(p.bio_fa) : '<i>no Persian bio</i>'}`,
+		p.link ? `🔗 ${tg.esc(p.link)}` : null,
+	].filter((l) => l !== null).join('\n');
+}
+
+const personButtons = (p) => [
+	[b(p.avatar ? '📷 New photo' : '📷 Add a photo', `pph:${p.id}`), ...(p.avatar ? [b('🗑 Remove photo', `ppx:${p.id}`)] : [])],
+	[b('✏️ English bio', `pbe:${p.id}`), b('✏️ Persian bio', `pbf:${p.id}`)],
+	[b('🔤 English name', `pne:${p.id}`), b('🔤 Persian name', `pnf:${p.id}`)],
+	[b('🔗 Link', `pln:${p.id}`), b(p.host ? '⭐ Author ✓' : '⭐ Make author', `pho:${p.id}`)],
+	[b('🗑 Delete', `pdl:${p.id}`), b('⬅️ People', 'ppl:0')],
+];
+
+async function showPeople(chatId, messageId) {
+	const people = await listPeople();
+	const text = '👥 <b>People</b> shown on posts, with their photo and a short bio. Tap someone to change them. ' +
+		'Anyone named as a speaker is added here on their own.';
+	const buttons = [
+		...people.map((p) => [b(`${p.avatar ? '🖼' : '👤'} ${p.name}${p.name_fa ? ` · ${p.name_fa}` : ''}${p.host ? ' ⭐' : ''}`.slice(0, 60), `pp:${p.id}`)]),
+		[b('➕ Add someone', 'pa:0')],
+	];
+	if (messageId && (await tg.editText(chatId, messageId, text, buttons))) return;
+	await say(chatId, text, { buttons });
+}
+
+async function onPeople(q, raw, rawId, arg) {
+	const chatId = q.message.chat.id;
+	const msgId = q.message.message_id;
+	if (raw === 'ppl') {
+		await showPeople(chatId, msgId);
+		return tg.answerCallback(q.id);
+	}
+	if (raw === 'pa') {
+		await say(chatId, askPerson(0, 'new'), { forceReply: true });
+		return tg.answerCallback(q.id, 'Reply with the name');
+	}
+	const person = await getPerson(Number(rawId)).catch(() => null);
+	if (!person) {
+		await showPeople(chatId, msgId);
+		return tg.answerCallback(q.id, 'Not found.');
+	}
+	const view = (p, toast) => tg.editText(chatId, msgId, personText(p), personButtons(p)).then(() => tg.answerCallback(q.id, toast));
+	switch (raw) {
+		case 'pp':
+			return view(person);
+		case 'pph':
+			await say(chatId, askPerson(person.id, 'photo', person), { forceReply: true });
+			return tg.answerCallback(q.id, 'Send the photo as a reply');
+		case 'pbe':
+		case 'pbf':
+		case 'pne':
+		case 'pnf':
+		case 'pln': {
+			const field = { pbe: 'bio_en', pbf: 'bio_fa', pne: 'name', pnf: 'name_fa', pln: 'link' }[raw];
+			await say(chatId, askPerson(person.id, field, person), { forceReply: true });
+			return tg.answerCallback(q.id, 'Reply with it');
+		}
+		case 'ppx': {
+			const p = await updatePerson(person.id, { avatar: null });
+			if (person.avatar) deleteFile(person.avatar).catch(() => {});
+			rebuild();
+			return view(p, 'Photo removed');
+		}
+		case 'pho': {
+			const p = await updatePerson(person.id, { host: !person.host });
+			rebuild();
+			return view(p, p.host ? 'Now one of the authors' : 'Now a guest');
+		}
+		case 'pdl':
+			if (arg !== 'ok') {
+				await tg.editText(chatId, msgId, `${personText(person)}\n\n<b>Delete ${tg.esc(person.name)} from People?</b> Posts that name them keep the name, with a placeholder.`,
+					[[b('🗑 Yes, delete', `pdl:${person.id}:ok`), b('⬅️ Cancel', `pp:${person.id}`)]]);
+				return tg.answerCallback(q.id);
+			}
+			await deletePerson(person.id);
+			if (person.avatar) deleteFile(person.avatar).catch(() => {});
+			rebuild();
+			await showPeople(chatId, msgId);
+			return tg.answerCallback(q.id, 'Deleted');
+		default:
+			return tg.answerCallback(q.id, 'Unknown action.');
+	}
+}
+
+// A reply to one of the questions above: a photo, a bio, a name or a link.
+async function onPersonReply(m, id, field, who) {
+	const chatId = m.chat.id;
+	const done = async (p, what) => {
+		await tidy(chatId, m.reply_to_message.message_id, m.message_id);
+		rebuild();
+		await say(chatId, `${personText(p)}\n\n<i>✅ ${what} (${tg.esc(who)}). The site updates in a minute.</i>`, { buttons: personButtons(p) });
+	};
+	if (field === 'photo') {
+		const img = m.photo?.at(-1) || (/^image\//.test(m.document?.mime_type || '') ? m.document : null);
+		if (!img) return say(chatId, 'That isn\'t a photo. Send it as a photo or an image file, as a reply to the question.');
+		if ((img.file_size || 0) > TG_MAX_DOWNLOAD) return say(chatId, 'That image is bigger than Telegram lets bots download (20 MB). Upload it in the CMS instead.');
+		const person = await getPerson(id);
+		const type = img.mime_type || 'image/jpeg';
+		const buffer = await tg.downloadTelegramFile(img.file_id);
+		const fileId = await uploadFile(`person-${id}.${type.split('/')[1] || 'jpg'}`, buffer, type, `Photo: ${person.name}`);
+		const p = await updatePerson(id, { avatar: fileId });
+		if (person.avatar) deleteFile(person.avatar).catch(() => {});
+		return done(p, 'Photo saved');
+	}
+	const text = (m.text || '').trim();
+	if (!text) return say(chatId, 'Reply with text.');
+	if (field === 'new') {
+		const people = await listPeople();
+		const existing = findPerson(people, text);
+		if (existing) return say(chatId, `${tg.esc(existing.name)} is already in People.`, { buttons: personButtons(existing) });
+		const p = await createPerson({ name: text, short_name: text.split(/\s+/)[0], sort: people.length + 1 });
+		return done(p, 'Added. Next: a photo, the Persian name and a short bio');
+	}
+	const value = text === '-' ? null : text;
+	if (field === 'name' && !value) return say(chatId, 'The English name can\'t be empty.');
+	if (field === 'link' && value && !/^https?:\/\/\S+$/i.test(value)) return say(chatId, 'Send a full link that starts with https://');
+	const p = await updatePerson(id, { [field]: value });
+	return done(p, `${PERSON_FIELD[field][0].toUpperCase()}${PERSON_FIELD[field].slice(1)} ${value ? 'saved' : 'cleared'}`);
 }
 
 // ---------- the post list ----------
@@ -266,6 +417,7 @@ async function onButton(q) {
 	if (!allowed(chatId)) return tg.answerCallback(q.id, 'This chat is not allowed to control the bot.');
 	const [raw, rawId, arg] = String(q.data || '').split(':');
 	if (raw === 'g') return onGlobal(q, rawId, arg);
+	if (PERSON_ACTIONS.has(raw)) return onPeople(q, raw, rawId, arg);
 	if (raw === 'pl') {
 		await showList(chatId, Number(rawId) || 0, msgId);
 		return tg.answerCallback(q.id);
@@ -411,7 +563,8 @@ function attachmentOf(m) {
 async function startPost(fields, from, who) {
 	const post = await createPost({ ...fields, title: fields.title || 'From Telegram' });
 	rememberSpeakers(speakersOf(fields.notes));
-	await showCard(post.id, { repost: true, note: `🆕 Started from ${from} by ${who}` });
+	const added = await ensurePeople(speakersOf(fields.notes));
+	await showCard(post.id, { repost: true, note: `🆕 Started from ${from} by ${who}${newPeopleNote(added)}` });
 }
 
 // The question and its answer have done their job once the card shows the result.
@@ -475,6 +628,11 @@ async function onMessage(m) {
 	const replyText = reply?.text || reply?.caption || '';
 	const replyTo = postIdIn(replyText) || parseDraftFilename(reply?.document?.file_name)?.id || null;
 
+	// answers to a /people question (a photo, a bio, a name…)
+	const personAsk = reply?.from?.is_bot ? replyText.match(/^👤 person (\d+) · (\w+)/) : null;
+	if (personAsk) return onPersonReply(m, Number(personAsk[1]), personAsk[2], who);
+	if (m.photo) return say(chatId, 'To add someone\'s photo to the site, use /people, pick them, then send the photo as a reply.');
+
 	const file = attachmentOf(m);
 	if (file) return onFile(m, file, replyTo, who);
 
@@ -488,6 +646,7 @@ async function onMessage(m) {
 		if (name === 'start' || name === 'help') return say(chatId, HELP);
 		if (name === 'posts') return showList(chatId, 0);
 		if (name === 'settings') return showSettings(chatId);
+		if (name === 'people') return showPeople(chatId);
 		if (name === 'post') {
 			const id = Number(rest.replace('#', '').trim());
 			if (!id) return say(chatId, 'Which post? For example: <code>/post 12</code>');
@@ -516,9 +675,10 @@ async function onMessage(m) {
 	if (replyTo && replyText.startsWith('🗣')) {
 		const post = await updatePost(replyTo, { notes: text });
 		rememberSpeakers(speakersOf(text));
+		const added = await ensurePeople(speakersOf(text));
 		await tidy(chatId, reply.message_id, m.message_id);
 		const later = ['review', 'published', 'archived', 'error'].includes(post.status) ? ' 🔁 Rewrite to use them.' : '';
-		return showCard(replyTo, { note: `🗣 Notes updated (${who}).${later}` });
+		return showCard(replyTo, { note: `🗣 Notes updated (${who}).${later}${newPeopleNote(added)}` });
 	}
 	if (replyTo) {
 		const post = await getPost(replyTo);

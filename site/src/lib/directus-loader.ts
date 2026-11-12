@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Loader } from 'astro/loaders';
-import { LANGS } from '../consts';
+import { LANGS, SITE } from '../consts';
+import { firstWord, nameKey, speakersOf } from './names';
 import { tagNormalizer } from './tags';
 
 // One Directus row holds a post in both languages. Astro gets one entry per
@@ -162,7 +163,7 @@ async function fromSamples(dir: string): Promise<Row[]> {
 		for (const file of files.filter((f) => f.endsWith('.md'))) {
 			const slug = file.replace(/\.md$/, '');
 			const { data, body } = parseFrontmatter(await fs.readFile(path.join(dir, lang, file), 'utf8'));
-			const row = rows.get(slug) ?? { slug, published_at: data.pubDate, source_language: data.sourceLang ?? null };
+			const row = rows.get(slug) ?? { slug, published_at: data.pubDate, source_language: data.sourceLang ?? null, participants: data.people ?? null };
 			row[`title_${lang}`] = data.title;
 			row[`description_${lang}`] = data.description;
 			row[`tags_${lang}`] = data.tags ?? [];
@@ -171,6 +172,82 @@ async function fromSamples(dir: string): Promise<Row[]> {
 		}
 	}
 	return [...rows.values()];
+}
+
+// Who was in the session: the post's "People in this session" field, else the speakers named in
+// Notes ("Speaker 1 = Sajad"). Empty = the pages show the authors.
+function participantsOf(row: Row): string[] {
+	const listed = Array.isArray(row.participants) ? row.participants.map((p: unknown) => String(p).trim()).filter(Boolean) : [];
+	return listed.length ? listed : speakersOf(row.notes);
+}
+
+// ---------- people (Directus "people"): photos and short bios ----------
+
+const PEOPLE_DIR = path.resolve('public/people');
+
+// A small square WebP made by Directus from the uploaded photo, kept in public/people.
+async function avatarSrc(url: string, token: string, fileId: string) {
+	const name = `${String(fileId).replace(/[^\w-]/g, '')}.webp`;
+	const target = path.join(PEOPLE_DIR, name);
+	if (!(await fs.stat(target).then(() => true, () => false))) {
+		const res = await fetch(`${url.replace(/\/$/, '')}/assets/${encodeURIComponent(fileId)}?width=256&height=256&fit=cover&format=webp&quality=82`, {
+			headers: token ? { Authorization: `Bearer ${token}` } : {},
+		});
+		if (!res.ok) throw new Error(`photo ${fileId}: Directus answered ${res.status}`);
+		await fs.mkdir(PEOPLE_DIR, { recursive: true });
+		await fs.writeFile(target, Buffer.from(await res.arrayBuffer()));
+	}
+	return `/people/${name}`;
+}
+
+export function peopleLoader(): Loader {
+	return {
+		name: 'directus-people',
+		async load({ store, logger, parseData }) {
+			const url = process.env.DIRECTUS_URL;
+			const token = process.env.DIRECTUS_TOKEN ?? '';
+			let rows: Row[] = [];
+			if (url) {
+				const res = await fetch(`${url.replace(/\/$/, '')}/items/people?limit=-1&sort=sort,id`, {
+					headers: token ? { Authorization: `Bearer ${token}` } : {},
+				});
+				if (res.ok) rows = (await res.json()).data;
+				else logger.warn(`people: Directus answered ${res.status}, so names show without photos`);
+			} else {
+				// local preview: the authors from consts.ts, with placeholders
+				rows = SITE.en.authors.map((name, i) => ({ id: i + 1, sort: i + 1, name, name_fa: SITE.fa.authors[i], short_name: firstWord(name), host: true }));
+			}
+			store.clear();
+			for (const row of rows) {
+				let avatar: string | undefined;
+				if (row.avatar && url) {
+					try {
+						avatar = await avatarSrc(url, token, row.avatar);
+					} catch (e) {
+						logger.warn(`${row.name}: photo skipped (${(e as Error).message})`);
+					}
+				}
+				const names = [row.short_name, row.name, row.name_fa, firstWord(row.name), firstWord(row.name_fa), ...(Array.isArray(row.aliases) ? row.aliases : [])];
+				const id = String(row.id);
+				const data = await parseData({
+					id,
+					data: {
+						name: row.name,
+						nameFa: row.name_fa || row.name,
+						keys: [...new Set(names.filter(Boolean).map(nameKey).filter(Boolean))],
+						avatar,
+						bioEn: row.bio_en || '',
+						bioFa: row.bio_fa || '',
+						link: row.link || undefined,
+						host: Boolean(row.host),
+						sort: Number(row.sort) || Number(row.id) || 0,
+					},
+				});
+				store.set({ id, data });
+			}
+			logger.info(`${rows.length} people`);
+		},
+	};
 }
 
 export function directusLoader(): Loader {
@@ -230,6 +307,7 @@ export function directusLoader(): Loader {
 							updatedDate: row.date_updated ?? undefined,
 							// which other languages this post exists in, for the language switch
 							langs: LANGS.filter((l) => row[`body_${l}`]?.trim() && row[`title_${l}`]),
+							people: participantsOf(row),
 						},
 					});
 					store.set({ id, data, body, rendered: await renderMarkdown(body) });

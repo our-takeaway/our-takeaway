@@ -228,6 +228,11 @@ const postFields = [
 		note: 'Optional notes for the AI writer. Say who is who (e.g. "Speaker 1 = Sajad") so the post can say who said what; also what to focus on or leave out.',
 	}),
 	field('feedback', 'text', { interface: 'input-multiline', group: 'input_group', note: 'What should the AI change? Write it here, then set the status to "Revise with AI".' }),
+	field('participants', 'json', {
+		interface: 'tags', special: ['cast-json'], group: 'input_group',
+		translations: [{ language: 'en-US', translation: 'People in this session' }],
+		note: 'Shown on the post with their photos (People collection). Empty = the names in Notes ("Speaker 1 = Sajad"); none there = the authors.',
+	}),
 
 	group('fa_group', '2 · فارسی'),
 	field('title_fa', 'string', { interface: 'input', group: 'fa_group', options: { font: 'sans-serif' } }),
@@ -267,6 +272,55 @@ const postFields = [
 	field('date_created', 'timestamp', { special: ['date-created'], interface: 'datetime', readonly: true, hidden: true, width: 'half' }),
 	field('date_updated', 'timestamp', { special: ['date-updated'], interface: 'datetime', readonly: true, hidden: true, width: 'half' }),
 ];
+
+// ---------- the people collection: who shows up on posts, with a photo and a short bio ----------
+
+const peopleFields = [
+	field('sort', 'integer', { interface: 'input', hidden: true }),
+	field('name', 'string', {
+		interface: 'input', width: 'half', required: true,
+		translations: [{ language: 'en-US', translation: 'Name (English)' }],
+		note: 'As shown on the English site, e.g. "Sajad Sarlaki".',
+	}),
+	field('name_fa', 'string', {
+		interface: 'input', width: 'half',
+		translations: [{ language: 'en-US', translation: 'Name (Persian)' }],
+		note: 'As shown on the Persian site, e.g. «سجاد سرلکی». Empty = the English name.',
+	}),
+	field('short_name', 'string', {
+		interface: 'input', width: 'half',
+		translations: [{ language: 'en-US', translation: 'Name in Notes' }],
+		note: 'The name used for speakers, e.g. "Sajad" in "Speaker 1 = Sajad".',
+	}),
+	field('aliases', 'json', {
+		interface: 'tags', special: ['cast-json'], width: 'half',
+		translations: [{ language: 'en-US', translation: 'Other spellings' }],
+		note: 'Other ways the name is written, e.g. سجاد, Sajjad.',
+	}),
+	field('avatar', 'uuid', {
+		interface: 'file-image', special: ['file'], width: 'half',
+		translations: [{ language: 'en-US', translation: 'Photo' }],
+		note: 'Shown round. Empty = a placeholder with the first letter. Also from Telegram: /people.',
+	}),
+	field('host', 'boolean', {
+		interface: 'boolean', special: ['cast-boolean'], width: 'half',
+		options: { label: 'One of the authors (About page, and posts where nobody else is named)' },
+	}, { default_value: false }),
+	field('bio_en', 'text', { interface: 'input-multiline', width: 'half', translations: [{ language: 'en-US', translation: 'Short bio (English)' }], note: 'One or two sentences, shown at the end of posts.' }),
+	field('bio_fa', 'text', { interface: 'input-multiline', width: 'half', translations: [{ language: 'en-US', translation: 'Short bio (Persian)' }] }),
+	field('link', 'string', { interface: 'input', options: { placeholder: 'https://…' }, translations: [{ language: 'en-US', translation: 'Link' }], note: 'Website or LinkedIn (optional).' }),
+];
+
+// The two authors, so the site has them from the start (photos and bios can be added later).
+async function ensurePeople() {
+	const people = await api('GET', '/items/people?limit=1&fields=id');
+	if (people.length) return;
+	await api('POST', '/items/people', [
+		{ sort: 1, name: 'Sajad Sarlaki', name_fa: 'سجاد سرلکی', short_name: 'Sajad', aliases: ['سجاد'], host: true },
+		{ sort: 2, name: 'Alireza Asadi', name_fa: 'علیرضا اسدی', short_name: 'Alireza', aliases: ['علیرضا'], host: true },
+	]);
+	console.log('people: added Sajad and Alireza');
+}
 
 // ---------- the writer_settings singleton ----------
 
@@ -398,11 +452,11 @@ async function removeFields(name, list) {
 	}
 }
 
-async function ensureFileRelation(field) {
-	const rel = await api('GET', `/relations/posts/${field}`).catch(() => null);
+async function ensureFileRelation(field, collection = 'posts') {
+	const rel = await api('GET', `/relations/${collection}/${field}`).catch(() => null);
 	if (rel) return;
-	await api('POST', '/relations', { collection: 'posts', field, related_collection: 'directus_files', schema: { on_delete: 'SET NULL' } });
-	console.log(`  + relation posts.${field} → files`);
+	await api('POST', '/relations', { collection, field, related_collection: 'directus_files', schema: { on_delete: 'SET NULL' } });
+	console.log(`  + relation ${collection}.${field} → files`);
 }
 
 const readPrompt = (name) => fs.readFile(new URL(`./prompts/${name}`, import.meta.url), 'utf8');
@@ -565,6 +619,15 @@ await removeFields('posts', ['transcribe_audio']);
 await ensureFileRelation('audio');
 await ensureFileRelation('transcript_file');
 await ensureListView();
+await ensureCollection('people', {
+	icon: 'groups',
+	note: 'People who appear on posts: the authors and anyone named as a speaker. Add a photo and a short bio here or in Telegram (/people).',
+	display_template: '{{name}}',
+	sort_field: 'sort',
+	archive_field: null,
+}, peopleFields);
+await ensureFileRelation('avatar', 'people');
+await ensurePeople();
 const oldProvider = (await api('GET', '/items/writer_settings').catch(() => null))?.transcription_provider;
 await ensureCollection('writer_settings', { icon: 'smart_toy', singleton: true, note: 'How recordings are transcribed and how the AI writes and translates posts' }, settingsFields);
 await ensureSettings(oldProvider);

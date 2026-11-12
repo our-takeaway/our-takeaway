@@ -1,7 +1,9 @@
 ---
 import type { Lang } from '../consts';
 import { digits, formatDate, readingMinutes, t } from '../lib/i18n';
+import { joinNames, peopleOf } from '../lib/people';
 import type { Post } from '../lib/posts';
+import Avatar from './Avatar.astro';
 import Cover from './Cover.astro';
 
 interface Props {
@@ -9,17 +11,23 @@ interface Props {
 	posts: Post[];
 }
 const { lang, posts } = Astro.props;
+const people = await Promise.all(posts.map(async (post) => (await peopleOf(post.data.people, lang)).people));
 ---
 
 {posts.length === 0 ? (
 	<p class="muted">{t(lang, 'noPosts')}</p>
 ) : (
 	<ul class="post-list">
-		{posts.map((post) => (
+		{posts.map((post, i) => (
 			<li>
 				<a href={`/${lang}/blog/${post.data.slug}/`}>
 					<div class="entry-text">
 						<div class="meta">
+							{people[i].length > 0 && (
+								<span class="avatars avatars-small" title={joinNames(people[i].map((p) => p.name), lang)}>
+									{people[i].slice(0, 3).map((p) => <Avatar person={p} size={22} />)}
+								</span>
+							)}
 							{post.data.meeting != null && (
 								<span class="badge">{t(lang, 'meeting')} {digits(post.data.meeting, lang)}</span>
 							)}
